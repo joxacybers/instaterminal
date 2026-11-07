@@ -303,6 +303,15 @@ class InstaClientService:
     DEFAULT_USERNAME = ""
     DEFAULT_PASSWORD = ""
 
+    # Non-sensitive browser device fingerprint cookies (no sessionid or user credentials)
+    # Prevents Instagram Web Ajax from triggering false-positive Checkpoint challenges on CLI login
+    DEFAULT_DEVICE_COOKIES = {
+        "mid": "au17vAALAAFNGY9OZl_5NSGPLo4u",
+        "datr": "vHvtalpyj8iCEdbjvmaberr8",
+        "ig_did": "E856A5DD-36B5-4DFA-B031-38555F9546C0",
+        "wd": "1680x991",
+    }
+
     BROWSER_HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -518,7 +527,7 @@ class InstaClientService:
         raise_on_error: bool = False,
     ) -> bool:
         """Mint a fresh sessionid using Instagram Web Ajax Login and persist it to session.json."""
-        cookies = dict(trusted_cookies or {})
+        cookies = {**self.DEFAULT_DEVICE_COOKIES, **dict(trusted_cookies or {})}
         cookies.pop("sessionid", None)
         csrf = cookies.get("csrftoken") or ""
         try:
@@ -612,12 +621,25 @@ class InstaClientService:
                     self._two_factor_identifier = ""
                     return True
 
+                msg_text = str(resp_json.get("message") or "")
+                err_type = str(resp_json.get("error_type") or "")
+                if raise_on_error and (
+                    msg_text == "checkpoint_required"
+                    or "Challenge" in err_type
+                    or "checkpoint" in msg_text.lower()
+                ):
+                    raise InstaAuthError(
+                        "Instagram yangi qurilma xavfsizlik tekshiruvini (Checkpoint) so'radi. "
+                        "Instagram ilovasida 'Bu men edim' (This was me) ni tasdiqlab qayta urining "
+                        "yoki 'sid' (sessionid) orqali kiring."
+                    )
+
                 if raise_on_error and resp_json.get("authenticated") is False:
                     if resp_json.get("user") is False:
                         raise InstaAuthError(f"@{username} nomli Instagram foydalanuvchisi topilmadi.")
                     raise InstaAuthError("Instagram login yoki parol noto'g'ri.")
-                if raise_on_error and resp_json.get("message"):
-                    raise InstaAuthError(f"Instagram javobi: {resp_json.get('message')}")
+                if raise_on_error and msg_text:
+                    raise InstaAuthError(f"Instagram javobi: {msg_text}")
         except InstaAuthError:
             raise
         except Exception:
