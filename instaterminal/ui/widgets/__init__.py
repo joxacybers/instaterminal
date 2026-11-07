@@ -1,0 +1,2 @@
+"""Widgets for InstaTerminal."""
+

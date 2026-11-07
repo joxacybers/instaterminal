@@ -1,0 +1,280 @@
+/* InstaTerminal — Modern Dark Neon Instagram TUI Stylesheet */
+
+Screen {
+    background: #0d0f17;
+    color: #f0f4f8;
+}
+
+/* Status Bar at Top */
+#top-status-bar {
+    dock: top;
+    height: 3;
+    background: #161925;
+    border-bottom: solid #e1306c;
+    padding: 0 2;
+    align: left middle;
+}
+
+#brand-title {
+    width: 1fr;
+    color: #ff4b8b;
+    text-style: bold;
+}
+
+#user-badge {
+    width: auto;
+    color: #64ffda;
+    text-style: bold;
+    margin-right: 2;
+}
+
+/* Login Screen */
+LoginScreen {
+    align: center middle;
+    background: #0b0d14;
+}
+
+#login-card {
+    width: 72;
+    height: auto;
+    max-height: 96%;
+    overflow-y: auto;
+    background: #161925;
+    border: double #e1306c;
+    padding: 1 3;
+}
+
+#login-logo {
+    text-align: center;
+    color: #ff4b8b;
+    text-style: bold;
+}
+
+#login-subtitle {
+    text-align: center;
+    color: #94a3b8;
+    margin-bottom: 1;
+}
+
+.login-label {
+    color: #cbd5e1;
+    margin-top: 0;
+}
+
+#login-loader-row {
+    height: 3;
+    align: center middle;
+    display: none;
+    background: #1e2235;
+    border: round #ff4b8b;
+    margin: 1 0;
+    padding: 0 2;
+}
+
+#login-loader-row.active {
+    display: block;
+}
+
+#login-spinner {
+    height: 1;
+    color: #ff4b8b;
+}
+
+#login-status {
+    text-align: center;
+    color: #fbbf24;
+    background: #111420;
+    border: round #2e364f;
+    padding: 0 1;
+    margin: 1 0;
+    height: auto;
+}
+
+#login-actions {
+    height: auto;
+    margin-top: 1;
+    align: center middle;
+}
+
+#login-actions Button {
+    margin: 0 1;
+}
+
+/* Main Workspace Layout */
+#workspace {
+    height: 1fr;
+    width: 1fr;
+}
+
+/* Post Card */
+PostCard {
+    background: #151926;
+    border: round #2e364f;
+    padding: 1 2;
+    margin: 1 1;
+    height: auto;
+}
+
+PostCard:focus-within {
+    border: round #e1306c;
+}
+
+.post-header {
+    color: #ff75a0;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.post-image-box {
+    background: #0a0c12;
+    border: solid #252b3d;
+    padding: 0 1;
+    margin-bottom: 1;
+    width: auto;
+    height: auto;
+}
+
+.post-caption {
+    color: #e2e8f0;
+    margin-bottom: 1;
+}
+
+.post-stats {
+    color: #38bdf8;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.post-comments-box {
+    background: #10131d;
+    border-left: thick #833ab4;
+    padding: 0 1;
+    margin-bottom: 1;
+    height: auto;
+}
+
+.post-actions-row {
+    height: auto;
+    margin-top: 1;
+}
+
+.post-actions-row Button {
+    margin-right: 1;
+}
+
+.comment-input-row {
+    height: auto;
+    margin-top: 1;
+}
+
+.comment-input-row Input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+/* Stories & Reels View */
+.section-header {
+    color: #fcb045;
+    text-style: bold;
+    padding: 1 1 0 1;
+}
+
+.media-card {
+    background: #161a28;
+    border: round #3b4259;
+    padding: 1 2;
+    margin: 1 1;
+    height: auto;
+}
+
+/* Direct Messages View */
+#dm-split {
+    height: 1fr;
+    width: 1fr;
+}
+
+#dm-threads-pane {
+    width: 34;
+    background: #131722;
+    border-right: solid #2e364f;
+    padding: 1;
+}
+
+#dm-chat-pane {
+    width: 1fr;
+    padding: 1 2;
+    background: #0f131d;
+}
+
+#dm-messages-scroll {
+    height: 1fr;
+    background: #141824;
+    border: round #283046;
+    padding: 1 2;
+    margin-bottom: 1;
+}
+
+#dm-compose-row {
+    height: auto;
+    dock: bottom;
+}
+
+#dm-compose-row Input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+.msg-me {
+    color: #64ffda;
+    margin-bottom: 1;
+}
+
+.msg-other {
+    color: #f8fafc;
+    margin-bottom: 1;
+}
+
+/* Profile & Search View */
+#profile-search-bar {
+    height: auto;
+    padding: 1;
+    background: #141824;
+    border-bottom: solid #283046;
+}
+
+#profile-search-bar Input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#profile-header-card {
+    background: #161b29;
+    border: double #833ab4;
+    padding: 1 2;
+    margin: 1;
+    height: auto;
+}
+
+/* Upload Modal */
+UploadModal {
+    align: center middle;
+    background: rgba(10, 12, 18, 0.85);
+}
+
+#upload-dialog {
+    width: 78;
+    height: auto;
+    max-height: 90%;
+    background: #161926;
+    border: double #fcb045;
+    padding: 1 2;
+}
+
+#upload-preview-box {
+    background: #0b0d14;
+    border: solid #2e364f;
+    padding: 1;
+    margin: 1 0;
+    height: auto;
+}
+

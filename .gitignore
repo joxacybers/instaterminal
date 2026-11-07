@@ -1,0 +1,20 @@
+# Python cache & build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local session & downloads (if stored inside project)
+session.json
+downloads/
+cache/
+.env
+
