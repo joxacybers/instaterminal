@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -771,10 +772,32 @@ def print_help() -> None:
     help_table.add_row("images yoki img", "🖼️ Joriy profil postlarining rasmlarini terminalda chizish")
     help_table.add_row("me", "👤 Saqlangan shaxsiy profilingizni ko'rsatish")
     help_table.add_row("login / logout", "🔐 Instagram akkauntga kirish (sessiyani saqlash) yoki chiqish")
+    help_table.add_row("update", "🔄 GitHub'dan eng oxirgi yangilanishlarni tortib olish (sessiya saqlanib qoladi)")
     help_table.add_row("json", "🧬 Instagram qaytargan barcha xom (raw) JSON ma'lumotlarni ko'rish")
     help_table.add_row("clear / cls", "🧹 Terminal ekranini tozalash")
     help_table.add_row("q / exit", "🚪 Dasturdan chiqish")
     console.print(help_table)
+
+
+def run_self_update() -> None:
+    """Pull latest updates from GitHub repository without losing saved session."""
+    repo_root = Path(__file__).resolve().parent.parent
+    console.print("[bold cyan]🔄 GitHub'dan yangilanishlar tekshirilmoqda (git pull)...[/bold cyan]")
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(repo_root), "pull", "origin", "main"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        out = (res.stdout or "").strip()
+        err = (res.stderr or "").strip()
+        if res.returncode == 0:
+            console.print(f"[bold bright_green]✅ InstaTerminal yangilandi![/bold bright_green]\n[dim]{out}[/dim]")
+        else:
+            console.print(f"[bold red]❌ Yangilashda xatolik:[/bold red] {err or out}")
+    except Exception as exc:
+        console.print(f"[bold red]❌ Yangilashda xatolik: {exc}[/bold red]")
 
 
 def prompt_terminal_login(service: InstaClientService) -> bool:
@@ -945,6 +968,10 @@ def run_interactive_loop(
 
         if cmd in ("clear", "cls"):
             console.clear()
+            continue
+
+        if cmd == "update":
+            run_self_update()
             continue
 
         if cmd == "login":
@@ -1541,12 +1568,22 @@ def run_cli() -> None:
         help="Saqlangan Instagram sessiyasini o'chirish",
     )
     parser.add_argument(
+        "-u",
+        "--update",
+        action="store_true",
+        help="GitHub'dan eng oxirgi yangilanishni tortib olish (git pull)",
+    )
+    parser.add_argument(
         "-v",
         "--version",
         action="version",
         version=f"InstaTerminal v{__version__}",
     )
     args = parser.parse_args()
+
+    if args.update:
+        run_self_update()
+        return
 
     service = InstaClientService()
     if args.logout:
