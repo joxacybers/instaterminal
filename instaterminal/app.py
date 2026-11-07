@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from rich import box
 from rich.columns import Columns
@@ -23,7 +23,7 @@ from instaterminal import __version__
 from instaterminal.core.client import InstaAuthError, InstaClientService
 from instaterminal.core.config import get_downloads_dir, get_session_file, get_user_download_dir
 from instaterminal.core.image_renderer import TerminalImageRenderer
-from instaterminal.core.models import HighlightItem, PostItem, UserProfile, UserShort
+from instaterminal.core.models import CommentItem, HighlightItem, PostItem, UserProfile, UserShort
 
 console = Console()
 
@@ -354,7 +354,12 @@ def render_download_center_panel(profile: UserProfile) -> None:
     dl_table.add_row(
         "👥 Obunachilar/Obunalar (@user/followers/)",
         f"{profile.follower_count:,} obunachi / {profile.following_count:,} obuna",
-        "save followers  |  save following",
+        "followers  |  followers deep 10  |  save followers",
+    )
+    dl_table.add_row(
+        "💬 Kommentlar va OSINT Qidiruv (@user/comments/)",
+        "Post kommentlari / Kim qayerga nima yozgani",
+        "comments 1  |  comments @user2  |  osint",
     )
     dl_table.add_row(
         "📋 Profil Ma'lumotlari (@user/info/)",
@@ -694,7 +699,7 @@ def render_user_list_to_terminal(
     users: list[UserShort],
     total_count: int = 0,
 ) -> None:
-    """Render a table of followers or following users."""
+    """Render a table of followers or following users (supports standard & deep scan modes)."""
     console.print()
     console.print(
         Rule(
@@ -707,6 +712,7 @@ def render_user_list_to_terminal(
         console.print("[yellow]Foydalanuvchilar ro'yxati bo'sh yoki olinmadi.[/yellow]")
         return
 
+    has_deep = any(u.follower_count is not None for u in users)
     is_narrow = console.size.width < 90
     table = Table(
         box=box.ROUNDED,
@@ -715,33 +721,176 @@ def render_user_list_to_terminal(
         expand=True,
     )
     table.add_column("#", style="bold yellow", width=4, justify="right")
-    table.add_column("Username", style="bold bright_white", ratio=2)
+    table.add_column("Username / ID", style="bold bright_white", ratio=2)
     table.add_column("To'liq ismi", style="white", ratio=2)
-    table.add_column("Holati", style="magenta", ratio=1)
-    if not is_narrow:
+    table.add_column("Holati / Story", style="magenta", ratio=2)
+    if has_deep:
+        table.add_column("Statistika", style="bright_green", ratio=2)
+        table.add_column("Bio / Ssilka / Toifa", style="cyan", ratio=3)
+    elif not is_narrow:
         table.add_column("Instagram Havolasi", style="dim", ratio=2)
 
     for idx, u in enumerate(users, start=1):
-        v_tag = "✅ Verified" if u.is_verified else ""
+        v_tag = " ✅" if u.is_verified else ""
         p_tag = "🔒 Yopiq" if u.is_private else "🌍 Ochiq"
-        status_str = f"{p_tag}  {v_tag}".strip()
+        st_tag = "\n[bold bright_yellow]🔥 24s Story bor[/bold bright_yellow]" if u.latest_reel_media > 0 else ""
+        status_str = f"{p_tag}{v_tag}{st_tag}"
         link_str = f"https://www.instagram.com/{u.username}/"
+        user_cell = f"@{u.username}\n[dim]ID: {u.pk}[/dim]"
 
         row_cells = [
             str(idx),
-            f"@{u.username}",
+            user_cell,
             u.full_name or "[dim]-[/dim]",
             status_str,
         ]
-        if not is_narrow:
+        if has_deep:
+            if u.follower_count is not None:
+                stats_str = (
+                    f"👥 Obunachi: [bold]{u.follower_count:,}[/bold]\n"
+                    f"👣 Obuna: {u.following_count or 0:,}\n"
+                    f"📸 Post: {u.media_count or 0:,}"
+                )
+                bio_parts: list[str] = []
+                if u.category:
+                    bio_parts.append(f"[yellow]🏷️ {u.category}[/yellow]")
+                if u.biography:
+                    bio_parts.append(u.biography.replace("\n", " ")[:90])
+                if u.external_url:
+                    bio_parts.append(f"[underline bright_blue]🔗 {u.external_url}[/underline bright_blue]")
+                row_cells.append(stats_str)
+                row_cells.append("\n".join(bio_parts) if bio_parts else "[dim]-[/dim]")
+            else:
+                row_cells.append("[dim]-[/dim]")
+                row_cells.append("[dim]-[/dim]")
+        elif not is_narrow:
             row_cells.append(f"[underline blue]{link_str}[/underline blue]")
         table.add_row(*row_cells)
 
     console.print(table)
     console.print(
-        "[dim]💡 Ro'yxatdagi foydalanuvchi profiliga o'tish uchun [bold yellow]u 1[/bold yellow] (raqami) "
-        f"yoki [bold yellow]@{users[0].username}[/bold yellow] deb yozing.[/dim]"
+        "[dim]💡 Foydalanuvchi profiliga o'tish: [bold yellow]u 1[/bold yellow] (raqami) | "
+        "Chuqur tahlil (Bio, Ssilka, Obunachi soni): [bold yellow]followers deep 10[/bold yellow] yoki [bold yellow]following deep 10[/bold yellow][/dim]"
     )
+
+
+def render_comments_to_terminal(
+    title: str,
+    comments: list[CommentItem],
+    highlight_username: str = "",
+) -> None:
+    """Render a table of Instagram comments and replies."""
+    console.print()
+    console.print(
+        Rule(
+            f"[bold bright_cyan]💬 {title} (Jami: {len(comments)} ta komment)[/bold bright_cyan]",
+            style="cyan",
+        )
+    )
+    if not comments:
+        console.print("[yellow]Kommentlar topilmadi.[/yellow]")
+        return
+
+    hl_low = highlight_username.lower().lstrip("@")
+    table = Table(
+        box=box.ROUNDED,
+        border_style="bright_cyan",
+        show_lines=True,
+        expand=True,
+    )
+    table.add_column("#", style="bold yellow", width=4, justify="right")
+    table.add_column("Yozgan odam", style="bold bright_white", ratio=2)
+    table.add_column("Post egasi / Kod", style="cyan", ratio=2)
+    table.add_column("Vaqt / Layk", style="green", width=16)
+    table.add_column("Komment matni (va Reply)", style="white", ratio=4)
+
+    for idx, c in enumerate(comments, start=1):
+        ver_badge = " ✅" if c.user_is_verified else ""
+        is_target = hl_low and c.username.lower() == hl_low
+        u_style = "[bold bright_green]" if is_target else "[bold white]"
+        u_end = "[/bold bright_green]" if is_target else "[/bold white]"
+        author_col = f"{u_style}@{c.username}{ver_badge}{u_end}"
+        if c.user_full_name:
+            author_col += f"\n[dim]{c.user_full_name}[/dim]"
+
+        post_col = f"@{c.post_owner}\n[bold]{c.post_code}[/bold]"
+        if c.post_url:
+            post_col += f"\n[underline blue]{c.post_url}[/underline blue]"
+
+        time_col = f"{c.created_at or '-'}\n❤️ {c.likes_count:,}"
+
+        rep_prefix = ""
+        if c.is_reply:
+            rep_prefix = f"[bold yellow]↪ @{c.replied_to} ga javob:[/bold yellow] " if c.replied_to else "[bold yellow]↪ Reply:[/bold yellow] "
+
+        table.add_row(
+            str(idx),
+            author_col,
+            post_col,
+            time_col,
+            f"{rep_prefix}{c.text}",
+        )
+
+    console.print(table)
+
+
+def render_osint_comments_to_terminal(osint_data: dict[str, Any]) -> None:
+    """Render complete OSINT comment activity scan results."""
+    uname = osint_data.get("username") or ""
+    own_comments: list[CommentItem] = osint_data.get("own_comments") or []
+    ext_comments: list[CommentItem] = osint_data.get("external_comments") or []
+    top_commenters: list[dict[str, Any]] = osint_data.get("top_commenters") or []
+    scanned_accts: list[str] = osint_data.get("scanned_following_accounts") or []
+
+    console.print()
+    console.print(
+        Panel(
+            f"[bold bright_magenta]🕵️ OSINT KOMMENT VA FAOLLIK SKANERI: @{uname}[/bold bright_magenta]\n"
+            f"• O'z postlarida @{uname} yozgan komment/javoblar: [bold bright_green]{len(own_comments)} ta[/bold bright_green]\n"
+            f"• Obuna bo'lgan ({len(scanned_accts)} ta ochiq profil) postlarida @{uname} yozgan kommentlar: [bold bright_yellow]{len(ext_comments)} ta[/bold bright_yellow]\n"
+            f"• @{uname} postlariga eng ko'p komment yozgan faol odamlar: [bold bright_cyan]{len(top_commenters)} ta[/bold bright_cyan]",
+            border_style="bright_magenta",
+        )
+    )
+
+    if ext_comments:
+        render_comments_to_terminal(
+            f"@{uname} — Boshqalarning postlarida yozgan kommentlari",
+            ext_comments,
+            highlight_username=uname,
+        )
+
+    if own_comments:
+        render_comments_to_terminal(
+            f"@{uname} — O'z postlarida yozgan komment va javoblari (Replies)",
+            own_comments,
+            highlight_username=uname,
+        )
+
+    if top_commenters:
+        tc_table = Table(
+            title=f"🔥 @{uname} postlariga eng ko'p komment yozadigan insonlar (Top Commenters)",
+            box=box.ROUNDED,
+            border_style="bright_yellow",
+            show_lines=True,
+            expand=True,
+        )
+        tc_table.add_column("#", style="bold yellow", width=4, justify="right")
+        tc_table.add_column("Username", style="bold bright_white", ratio=2)
+        tc_table.add_column("Komment soni", style="bold bright_green", width=14, justify="right")
+        tc_table.add_column("Yozgan kommentlaridan namunalar", style="white", ratio=4)
+
+        for idx, tc in enumerate(top_commenters, start=1):
+            ver = " ✅" if tc.get("is_verified") else ""
+            fn = f"\n[dim]{tc['full_name']}[/dim]" if tc.get("full_name") else ""
+            samples = "\n".join(tc.get("sample_texts") or [])
+            tc_table.add_row(
+                str(idx),
+                f"@{tc['username']}{ver}{fn}",
+                f"{tc['count']} ta",
+                samples or "-",
+            )
+        console.print(tc_table)
 
 
 def print_help() -> None:
@@ -763,8 +912,13 @@ def print_help() -> None:
     help_table.add_row("save <N> (masalan: save 1)", "📸 N-post, Reel yoki Albomning barcha slaydlarini yuklab olish")
     help_table.add_row("save posts (yoki save reels)", "📸 Profilning BARCHA postlari, Reels videolari va Albomlarini yuklab olish")
     help_table.add_row("followers (yoki f)", "👥 Joriy profilning barcha obunachilarini (followers) terminalda ko'rish")
+    help_table.add_row("followers deep [N]", "🕵️ Obunachilarning chuqur ma'lumotlarini (Bio, Ssilka, Obunachi/Post soni) olish")
     help_table.add_row("following (yoki fol)", "👥 Joriy profilning barcha obunalarini (following) terminalda ko'rish")
+    help_table.add_row("following deep [N]", "🕵️ Obunalarning chuqur ma'lumotlarini (Bio, Ssilka, Obunachi/Post soni) olish")
     help_table.add_row("save followers / save following", "💾 Obunachilar yoki obunalar ro'yxatini .txt va .json faylga saqlash")
+    help_table.add_row("comments <N> (yoki c <N>)", "💬 N-postdagi barcha ochiq kommentlar va javoblarni (replies) ko'rish va saqlash")
+    help_table.add_row("comments @user2 (yoki c @user2)", "🕵️ Joriy profil (@user1) @user2 ning postlarida nima komment yozganini topish")
+    help_table.add_row("osint (yoki comments scan)", "🕵️ @user1 o'zida va obunalarida qayerga nima komment yozganini avtomatik qidirish")
     help_table.add_row("save info", "📋 Profil haqidagi to'liq hisobotni (.txt va .json) faylga saqlash")
     help_table.add_row("dl <URL>", "🔗 Istalgan Instagram Post/Reel/Highlight/Story havolasini (URL) yuklab olish")
     help_table.add_row("folder (yoki open folder)", "📂 Yuklab olingan fayllar papkasini Windows Explorer'da ochish")
@@ -1064,7 +1218,13 @@ def run_interactive_loop(
                 cmd = "save"
                 arg = "followers"
             else:
-                amt = int(arg) if arg.isdigit() else 0
+                arg_parts = arg.lower().split()
+                is_deep = bool(arg_parts and arg_parts[0] in ("deep", "full", "info", "osint"))
+                amt = 0
+                if is_deep:
+                    amt = int(arg_parts[1]) if (len(arg_parts) > 1 and arg_parts[1].isdigit()) else 10
+                elif arg.isdigit():
+                    amt = int(arg)
                 try:
                     with console.status(
                         f"[bold cyan]👥 @{current_profile.username} obunachilari (followers) yuklanmoqda...[/bold cyan]",
@@ -1074,12 +1234,28 @@ def run_interactive_loop(
                             current_profile.user_id or current_profile.username,
                             amount=amt,
                         )
+                        if is_deep and followers_list:
+                            followers_list = service.enrich_users_deep(
+                                followers_list,
+                                max_users=amt or 10,
+                            )
+                            saved_deep = service.export_user_list(
+                                current_profile.username,
+                                "followers_deep",
+                                followers_list,
+                            )
+                        else:
+                            saved_deep = []
                     last_user_list = followers_list
                     render_user_list_to_terminal(
-                        f"@{current_profile.username} — Obunachilar (Followers)",
+                        f"@{current_profile.username} — Obunachilar (Followers{' - Chuqur Tahlil' if is_deep else ''})",
                         followers_list,
                         total_count=current_profile.follower_count,
                     )
+                    if saved_deep:
+                        console.print("[bold bright_green]✅ Chuqur tahlil faylga ham saqlandi:[/bold bright_green]")
+                        for sf in saved_deep:
+                            console.print(f"   📁 [underline cyan]{sf}[/underline cyan]")
                 except Exception as exc:
                     console.print(f"[bold red]❌ Obunachilarni olishda xatolik: {exc}[/bold red]")
                 continue
@@ -1092,7 +1268,13 @@ def run_interactive_loop(
                 cmd = "save"
                 arg = "following"
             else:
-                amt = int(arg) if arg.isdigit() else 0
+                arg_parts = arg.lower().split()
+                is_deep = bool(arg_parts and arg_parts[0] in ("deep", "full", "info", "osint"))
+                amt = 0
+                if is_deep:
+                    amt = int(arg_parts[1]) if (len(arg_parts) > 1 and arg_parts[1].isdigit()) else 10
+                elif arg.isdigit():
+                    amt = int(arg)
                 try:
                     with console.status(
                         f"[bold cyan]👥 @{current_profile.username} obunalari (following) yuklanmoqda...[/bold cyan]",
@@ -1102,15 +1284,126 @@ def run_interactive_loop(
                             current_profile.user_id or current_profile.username,
                             amount=amt,
                         )
+                        if is_deep and following_list:
+                            following_list = service.enrich_users_deep(
+                                following_list,
+                                max_users=amt or 10,
+                            )
+                            saved_deep = service.export_user_list(
+                                current_profile.username,
+                                "following_deep",
+                                following_list,
+                            )
+                        else:
+                            saved_deep = []
                     last_user_list = following_list
                     render_user_list_to_terminal(
-                        f"@{current_profile.username} — Obunalar (Following)",
+                        f"@{current_profile.username} — Obunalar (Following{' - Chuqur Tahlil' if is_deep else ''})",
                         following_list,
                         total_count=current_profile.following_count,
                     )
+                    if saved_deep:
+                        console.print("[bold bright_green]✅ Chuqur tahlil faylga ham saqlandi:[/bold bright_green]")
+                        for sf in saved_deep:
+                            console.print(f"   📁 [underline cyan]{sf}[/underline cyan]")
                 except Exception as exc:
                     console.print(f"[bold red]❌ Obunalarni olishda xatolik: {exc}[/bold red]")
                 continue
+
+        if cmd in ("comments", "comment", "c", "osint", "scan_comments", "find_comments"):
+            if not current_profile:
+                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+                continue
+
+            sub_arg = arg.strip()
+            # Case 1: `comments <N>` -> View and export all comments on post #N of current_profile
+            if sub_arg.isdigit():
+                idx_p = int(sub_arg)
+                if 1 <= idx_p <= len(current_profile.posts):
+                    target_post = current_profile.posts[idx_p - 1]
+                    try:
+                        with console.status(
+                            f"[bold cyan]💬 Post #{idx_p} ({target_post.code}) kommentlari va javoblari yuklanmoqda...[/bold cyan]",
+                            spinner="dots",
+                        ):
+                            post_comments = service.fetch_post_comments(target_post, amount=150)
+                            saved_c = service.export_comments_report(
+                                current_profile.username,
+                                f"post_{idx_p}_{target_post.code}_comments",
+                                post_comments,
+                            )
+                        render_comments_to_terminal(
+                            f"@{current_profile.username} — Post #{idx_p} ({target_post.code}) Kommentlari",
+                            post_comments,
+                            highlight_username=current_profile.username,
+                        )
+                        for sf in saved_c:
+                            console.print(f"   📁 [underline cyan]{sf}[/underline cyan]")
+                    except Exception as exc:
+                        console.print(f"[bold red]❌ Kommentlarni olishda xatolik: {exc}[/bold red]")
+                else:
+                    console.print(f"[red]❌ Post #{idx_p} topilmadi (1..{len(current_profile.posts)}).[/red]")
+                continue
+
+            # Case 2: `comments @user2` -> Check what comments @current_profile wrote on @user2's posts!
+            if sub_arg and not sub_arg.lower().startswith("scan") and sub_arg.lower() not in ("all", "osint"):
+                target_u2 = service.normalize_username(sub_arg)
+                try:
+                    with console.status(
+                        f"[bold magenta]🕵️ @{current_profile.username} ning @{target_u2} postlarida yozgan kommentlari qidirilmoqda...[/bold magenta]",
+                        spinner="dots",
+                    ):
+                        found_comments = service.find_user_comments_on_target(
+                            author_username=current_profile.username,
+                            target_username=target_u2,
+                            max_posts=12,
+                            comments_per_post=150,
+                        )
+                        saved_c = service.export_comments_report(
+                            current_profile.username,
+                            f"on_{target_u2}_comments",
+                            found_comments,
+                        )
+                    render_comments_to_terminal(
+                        f"🕵️ @{current_profile.username} ➡️ @{target_u2} postlarida yozgan kommentlari",
+                        found_comments,
+                        highlight_username=current_profile.username,
+                    )
+                    for sf in saved_c:
+                        console.print(f"   📁 [underline cyan]{sf}[/underline cyan]")
+                except Exception as exc:
+                    console.print(f"[bold red]❌ Komment qidiruvda xatolik: {exc}[/bold red]")
+                continue
+
+            # Case 3: `osint` or `comments` or `comments scan` -> Full OSINT scan across own posts + following accounts
+            parts_scan = sub_arg.split()
+            max_fol = 10
+            if len(parts_scan) >= 2 and parts_scan[1].isdigit():
+                max_fol = int(parts_scan[1])
+            try:
+                with console.status(
+                    f"[bold bright_magenta]🕵️ @{current_profile.username} bo'yicha OSINT komment skaneri ishlamoqda "
+                    f"(O'z postlari + obuna bo'lgan {max_fol} ta profil postlari)...[/bold bright_magenta]",
+                    spinner="dots",
+                ):
+                    osint_res = service.scan_user_comments_osint(
+                        current_profile,
+                        max_following_users=max_fol,
+                    )
+                    combined_comments = (osint_res.get("external_comments") or []) + (osint_res.get("own_comments") or [])
+                    saved_c = service.export_comments_report(
+                        current_profile.username,
+                        "osint_activity_scan",
+                        combined_comments,
+                        extra_summary=osint_res,
+                    )
+                render_osint_comments_to_terminal(osint_res)
+                console.print("[bold bright_green]✅ OSINT hisoboti saqlandi:[/bold bright_green]")
+                for sf in saved_c:
+                    console.print(f"   📁 [underline cyan]{sf}[/underline cyan]")
+            except Exception as exc:
+                console.print(f"[bold red]❌ OSINT skanerda xatolik: {exc}[/bold red]")
+            continue
 
         if cmd in ("st", "story", "stories"):
             if not current_profile:

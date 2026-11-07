@@ -29,6 +29,7 @@ from instaterminal.core.config import (
     notify_android_media_scanner,
 )
 from instaterminal.core.models import (
+    CommentItem,
     HighlightItem,
     PostItem,
     StoryItem,
@@ -296,6 +297,38 @@ class _LightweightV1Client:
     def user_following_v1(self, user_id: int | str, amount: int = 0) -> list[_AttrObj]:
         return self._fetch_friendship_list(f"friendships/{user_id}/following/", amount=amount)
 
+    def media_comments_v1(self, media_id: int | str, amount: int = 100) -> list[dict[str, Any]]:
+        """Fetch real comments (including threaded preview replies) for a media item via Instagram v1 API."""
+        clean_id = str(media_id).split("_")[0]
+        results: list[dict[str, Any]] = []
+        min_id: Optional[str] = None
+        target = amount if amount > 0 else 100
+        while len(results) < target:
+            params: dict[str, Any] = {"can_support_threading": "true"}
+            if min_id:
+                params["min_id"] = min_id
+            data = self._get(f"media/{clean_id}/comments/", params=params)
+            batch = data.get("comments") or []
+            if not batch:
+                break
+            for c in batch:
+                if isinstance(c, dict):
+                    results.append(c)
+                    for child in c.get("preview_child_comments") or []:
+                        if isinstance(child, dict):
+                            child_copy = dict(child)
+                            child_copy["_is_reply"] = True
+                            parent_u = (c.get("user") or {}).get("username") or ""
+                            child_copy["_replied_to"] = str(parent_u)
+                            results.append(child_copy)
+                    if len(results) >= target:
+                        break
+            next_min = data.get("next_min_id") or data.get("next_max_id")
+            if not next_min or not (data.get("has_more_comments") or data.get("has_more_headload_comments")):
+                break
+            min_id = str(next_min)
+        return results
+
 
 class InstaClientService:
     """Real Instagram service fetching live profile, highlights, and posts directly from Instagram."""
@@ -333,16 +366,7 @@ class InstaClientService:
 
     def _ensure_instagrapi(self):
         if self._cl is None:
-            if is_termux():
-                self._cl = _LightweightV1Client()
-            else:
-                try:
-                    from instagrapi import Client
-
-                    self._cl = Client()
-                    self._cl.request_timeout = 15
-                except Exception:
-                    self._cl = _LightweightV1Client()
+            self._cl = _LightweightV1Client()
         return self._cl
 
     def _has_live_token(self) -> bool:
@@ -387,8 +411,14 @@ class InstaClientService:
             try:
                 cl = self._ensure_instagrapi()
                 cl.login_by_sessionid(clean_sid)
-                info = cl.user_info_v1(int(cl.user_id))
-                resolved_user = str(getattr(info, "username", "") or clean_user or "instagram")
+                resolved_user = clean_user
+                if not resolved_user:
+                    try:
+                        info = cl.user_info_v1(int(cl.user_id))
+                        resolved_user = str(getattr(info, "username", "") or "")
+                    except Exception:
+                        resolved_user = ""
+                resolved_user = resolved_user or "instagram"
                 settings = cl.get_settings()
                 settings["username"] = resolved_user
                 if password:
@@ -495,8 +525,14 @@ class InstaClientService:
             try:
                 cl = self._ensure_instagrapi()
                 cl.login_by_sessionid(sid)
-                info = cl.user_info_v1(int(cl.user_id))
-                resolved_user = str(getattr(info, "username", "") or clean_user or "instagram")
+                resolved_user = clean_user
+                if not resolved_user:
+                    try:
+                        info = cl.user_info_v1(int(cl.user_id))
+                        resolved_user = str(getattr(info, "username", "") or "")
+                    except Exception:
+                        resolved_user = ""
+                resolved_user = resolved_user or "instagram"
                 settings = cl.get_settings()
                 settings["username"] = resolved_user
                 if saved_password:
@@ -2202,22 +2238,42 @@ class InstaClientService:
         for idx, u in enumerate(users, start=1):
             priv = "Private" if u.is_private else "Public"
             ver = "Verified" if u.is_verified else "Unverified"
+            story_str = "ActiveStory" if u.latest_reel_media > 0 else "NoStory"
             link = f"https://www.instagram.com/{u.username}/"
+            extra_str = ""
+            if u.follower_count is not None:
+                extra_str = (
+                    f" | Followers: {u.follower_count} | Following: {u.following_count or 0} | "
+                    f"Posts: {u.media_count or 0} | Cat: {u.category or '-'} | "
+                    f"URL: {u.external_url or '-'} | Bio: {(u.biography or '').replace(chr(10), ' ')[:80]}"
+                )
             lines.append(
-                f"{idx:4d}. @{u.username:<24} | {u.full_name:<26} | {priv:<7} | {ver:<10} | {link}"
+                f"{idx:4d}. @{u.username:<24} | ID:{u.pk:<12} | {u.full_name:<24} | {priv:<7} | {ver:<10} | {story_str:<11} | {link}{extra_str}"
             )
-            json_rows.append(
-                {
-                    "index": idx,
-                    "pk": u.pk,
-                    "username": u.username,
-                    "full_name": u.full_name,
-                    "is_private": u.is_private,
-                    "is_verified": u.is_verified,
-                    "profile_url": link,
-                    "profile_pic_url": u.profile_pic_url,
-                }
-            )
+            row_dict: dict[str, Any] = {
+                "index": idx,
+                "pk": u.pk,
+                "username": u.username,
+                "full_name": u.full_name,
+                "is_private": u.is_private,
+                "is_verified": u.is_verified,
+                "has_active_story": u.latest_reel_media > 0,
+                "latest_reel_media": u.latest_reel_media,
+                "profile_url": link,
+                "profile_pic_url": u.profile_pic_url,
+            }
+            if u.follower_count is not None:
+                row_dict.update(
+                    {
+                        "follower_count": u.follower_count,
+                        "following_count": u.following_count,
+                        "media_count": u.media_count,
+                        "category": u.category,
+                        "external_url": u.external_url,
+                        "biography": u.biography,
+                    }
+                )
+            json_rows.append(row_dict)
 
         txt_path.write_text("\n".join(lines), encoding="utf-8")
         json_path.write_text(
@@ -2506,6 +2562,7 @@ class InstaClientService:
                         profile_pic_url=str(u.profile_pic_url) if getattr(u, "profile_pic_url", None) else None,
                         is_private=bool(getattr(u, "is_private", False)),
                         is_verified=bool(getattr(u, "is_verified", False)),
+                        latest_reel_media=int(getattr(u, "latest_reel_media", 0) or 0),
                     )
                 )
             return res
@@ -2549,11 +2606,316 @@ class InstaClientService:
                         profile_pic_url=str(u.profile_pic_url) if getattr(u, "profile_pic_url", None) else None,
                         is_private=bool(getattr(u, "is_private", False)),
                         is_verified=bool(getattr(u, "is_verified", False)),
+                        latest_reel_media=int(getattr(u, "latest_reel_media", 0) or 0),
                     )
                 )
             return res
         except Exception as exc:
             raise RuntimeError(f"Obunalarni olishda xatolik: {exc}") from exc
+
+    def enrich_users_deep(
+        self,
+        users: list[UserShort],
+        max_users: int = 10,
+    ) -> list[UserShort]:
+        """
+        Deep-scan the first `max_users` items in a follower/following list to populate
+        follower_count, following_count, media_count, biography, external_url, and category.
+        """
+        limit = max(1, min(max_users, len(users)))
+        for idx in range(limit):
+            u = users[idx]
+            try:
+                prof = self.fetch_real_profile(u.username, download_media=False)
+                u.follower_count = prof.follower_count
+                u.following_count = prof.following_count
+                u.media_count = prof.media_count
+                u.biography = prof.biography or ""
+                u.external_url = prof.external_url or (", ".join(prof.bio_links) if prof.bio_links else "")
+                u.category = prof.category_name or ""
+                if prof.has_public_story and not u.latest_reel_media:
+                    u.latest_reel_media = 1
+            except Exception:
+                continue
+        return users
+
+    def _fetch_raw_media_comments(
+        self,
+        media_id: str | int,
+        amount: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Fetch raw comment dictionaries from Instagram v1 API using current authenticated session."""
+        if not self._has_live_token():
+            self.ensure_default_session()
+        cl = self._ensure_instagrapi()
+        if hasattr(cl, "media_comments_v1"):
+            return cl.media_comments_v1(media_id, amount=amount)
+
+        auth_data = getattr(cl, "authorization_data", None) or {}
+        sid = auth_data.get("sessionid") or ""
+        if not sid:
+            return []
+        v1_helper = _LightweightV1Client()
+        v1_helper.login_by_sessionid(str(sid))
+        return v1_helper.media_comments_v1(media_id, amount=amount)
+
+    def fetch_post_comments(
+        self,
+        post: PostItem,
+        amount: int = 100,
+    ) -> list[CommentItem]:
+        """Fetch real comments and threaded replies for a specific PostItem."""
+        media_id = str(post.id or "").split("_")[0]
+        if not media_id or not media_id.isdigit():
+            return list(post.comments)
+
+        try:
+            raw_list = self._fetch_raw_media_comments(media_id, amount=amount)
+        except Exception:
+            return list(post.comments)
+
+        parsed: list[CommentItem] = []
+        for c in raw_list:
+            u = c.get("user") or {}
+            uname = str(u.get("username") or "unknown")
+            ufull = str(u.get("full_name") or "")
+            uver = bool(u.get("is_verified", False))
+            ts = int(c.get("created_at_utc") or c.get("created_at") or 0)
+            dt_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts > 0 else ""
+            likes = int(c.get("comment_like_count") or c.get("like_count") or 0)
+            text = str(c.get("text") or "").strip()
+            is_rep = bool(c.get("_is_reply", False))
+            rep_to = str(c.get("_replied_to") or "")
+            parsed.append(
+                CommentItem(
+                    id=str(c.get("pk") or c.get("id") or ""),
+                    username=uname,
+                    text=text,
+                    created_at=dt_str,
+                    likes_count=likes,
+                    user_full_name=ufull,
+                    user_is_verified=uver,
+                    post_code=post.code,
+                    post_owner=post.username,
+                    post_url=post.post_url,
+                    is_reply=is_rep,
+                    replied_to=rep_to,
+                )
+            )
+        if parsed:
+            post.comments = parsed
+        return parsed
+
+    def find_user_comments_on_target(
+        self,
+        author_username: str,
+        target_username: str,
+        max_posts: int = 12,
+        comments_per_post: int = 120,
+    ) -> list[CommentItem]:
+        """
+        Scan the posts of `@target_username` and return all comments/replies written by
+        `@author_username` (or mentioning `@author_username`).
+        """
+        clean_author = self.normalize_username(author_username).lower()
+        clean_target = self.normalize_username(target_username)
+        if not clean_author or not clean_target:
+            return []
+
+        target_prof = self.fetch_real_profile(clean_target, download_media=False)
+        posts_to_scan = list(target_prof.posts[:max_posts])
+        if len(posts_to_scan) < max_posts and not target_prof.is_private and target_prof.user_id:
+            try:
+                more_posts = self.fetch_all_user_posts(target_prof.user_id, max_amount=max_posts)
+                if more_posts:
+                    posts_to_scan = more_posts[:max_posts]
+            except Exception:
+                pass
+
+        matched: list[CommentItem] = []
+        seen_ids: set[str] = set()
+        for p in posts_to_scan:
+            if p.comment_count <= 0:
+                continue
+            comments = self.fetch_post_comments(p, amount=comments_per_post)
+            for c in comments:
+                is_author = c.username.lower() == clean_author
+                is_mentioned = f"@{clean_author}" in c.text.lower() or c.replied_to.lower() == clean_author
+                if (is_author or is_mentioned) and c.id not in seen_ids:
+                    seen_ids.add(c.id)
+                    matched.append(c)
+        return matched
+
+    def scan_user_comments_osint(
+        self,
+        profile: UserProfile,
+        max_following_users: int = 10,
+        posts_per_user: int = 4,
+        comments_per_post: int = 80,
+    ) -> dict[str, Any]:
+        """
+        OSINT Comment & Activity Scanner for `@profile.username`:
+        1. Scans `@profile.username`'s own posts to find:
+           - Comments/replies written by `@profile.username` (`own_comments`)
+           - Most active commenters on `@profile.username`'s posts (`top_commenters`)
+        2. Scans public profiles that `@profile.username` follows (`following`) to find
+           where `@profile.username` has written comments or replies (`external_comments`)!
+        """
+        target_u = profile.username.lower()
+        own_comments: list[CommentItem] = []
+        external_comments: list[CommentItem] = []
+        commenter_counts: dict[str, dict[str, Any]] = {}
+        seen_ids: set[str] = set()
+
+        # 1. Scan user's own posts
+        for p in profile.posts[:10]:
+            if p.comment_count <= 0:
+                continue
+            c_list = self.fetch_post_comments(p, amount=comments_per_post)
+            for c in c_list:
+                cu_low = c.username.lower()
+                if cu_low == target_u:
+                    if c.id not in seen_ids:
+                        seen_ids.add(c.id)
+                        own_comments.append(c)
+                else:
+                    entry = commenter_counts.setdefault(
+                        cu_low,
+                        {
+                            "username": c.username,
+                            "full_name": c.user_full_name,
+                            "is_verified": c.user_is_verified,
+                            "count": 0,
+                            "sample_texts": [],
+                        },
+                    )
+                    entry["count"] += 1
+                    if len(entry["sample_texts"]) < 3 and c.text:
+                        entry["sample_texts"].append(f"[{p.code}] {c.text[:60]}")
+
+        # 2. Scan posts of public accounts that @profile.username follows
+        scanned_accounts: list[str] = []
+        if not profile.is_private and profile.following_count > 0:
+            try:
+                following_list = self.get_user_following(
+                    profile.user_id or profile.username,
+                    amount=max(30, max_following_users * 3),
+                )
+                public_followings = [u for u in following_list if not u.is_private][:max_following_users]
+                for fol_u in public_followings:
+                    scanned_accounts.append(fol_u.username)
+                    try:
+                        fol_posts = self.fetch_all_user_posts(fol_u.pk, max_amount=posts_per_user)
+                        for fp in fol_posts[:posts_per_user]:
+                            fp.username = fol_u.username
+                            if fp.comment_count <= 0:
+                                continue
+                            f_comments = self.fetch_post_comments(fp, amount=comments_per_post)
+                            for c in f_comments:
+                                if (
+                                    c.username.lower() == target_u
+                                    or f"@{target_u}" in c.text.lower()
+                                    or c.replied_to.lower() == target_u
+                                ) and c.id not in seen_ids:
+                                    seen_ids.add(c.id)
+                                    external_comments.append(c)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        top_commenters = sorted(
+            commenter_counts.values(),
+            key=lambda x: x["count"],
+            reverse=True,
+        )[:15]
+
+        return {
+            "username": profile.username,
+            "own_comments": own_comments,
+            "external_comments": external_comments,
+            "top_commenters": top_commenters,
+            "scanned_following_accounts": scanned_accounts,
+        }
+
+    def export_comments_report(
+        self,
+        username: str,
+        report_name: str,
+        comments: list[CommentItem],
+        extra_summary: Optional[dict[str, Any]] = None,
+        target_dir: Optional[Path] = None,
+    ) -> list[Path]:
+        """Save fetched or OSINT-discovered comments into <downloads_dir>/@<username>/comments/ (.txt and .json)."""
+        clean_u = self.normalize_username(username) or "instagram"
+        safe_rep = self._sanitize_filename(report_name) or "comments"
+        comments_dir = target_dir or get_user_category_dir(clean_u, "comments")
+        comments_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        txt_path = comments_dir / f"{clean_u}_{safe_rep}_{timestamp}.txt"
+        json_path = comments_dir / f"{clean_u}_{safe_rep}_{timestamp}.json"
+
+        lines = [
+            f"=== INSTAGRAM KOMMENTLAR VA OSINT HISOBOTI: @{clean_u} ({report_name}) ===",
+            f"Sana: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Jami topilgan kommentlar: {len(comments)} ta",
+            "=" * 80,
+        ]
+        for idx, c in enumerate(comments, start=1):
+            rep_tag = f" (↪ @{c.replied_to} ga javob)" if c.is_reply and c.replied_to else (" (↪ Reply)" if c.is_reply else "")
+            lines.append(
+                f"{idx:3d}. [{c.created_at or '-'}] @{c.username}{rep_tag} -> Post @{c.post_owner} [{c.post_code}] ({c.post_url})"
+            )
+            lines.append(f"     💬 Matn: {c.text}  (❤️ {c.likes_count})")
+
+        if extra_summary and extra_summary.get("top_commenters"):
+            lines.append("")
+            lines.append("--- ENG FAOL KOMMENT YOZUVCHILAR (Top Commenters) ---")
+            for idx, tc in enumerate(extra_summary["top_commenters"], start=1):
+                samples = " | ".join(tc.get("sample_texts") or [])
+                lines.append(
+                    f"{idx:2d}. @{tc['username']:<22} ({tc.get('full_name') or '-'}) — {tc['count']} ta komment | Namuna: {samples}"
+                )
+
+        txt_path.write_text("\n".join(lines), encoding="utf-8")
+
+        payload: dict[str, Any] = {
+            "username": clean_u,
+            "report_name": report_name,
+            "generated_at": datetime.now().isoformat(),
+            "comments_count": len(comments),
+            "comments": [
+                {
+                    "id": c.id,
+                    "username": c.username,
+                    "user_full_name": c.user_full_name,
+                    "user_is_verified": c.user_is_verified,
+                    "text": c.text,
+                    "created_at": c.created_at,
+                    "likes_count": c.likes_count,
+                    "post_owner": c.post_owner,
+                    "post_code": c.post_code,
+                    "post_url": c.post_url,
+                    "is_reply": c.is_reply,
+                    "replied_to": c.replied_to,
+                }
+                for c in comments
+            ],
+        }
+        if extra_summary:
+            payload["osint_summary"] = {
+                "scanned_following_accounts": extra_summary.get("scanned_following_accounts") or [],
+                "top_commenters": extra_summary.get("top_commenters") or [],
+            }
+
+        json_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        notify_android_media_scanner(txt_path)
+        notify_android_media_scanner(json_path)
+        return [txt_path, json_path]
 
     def open_in_system_viewer(self, file_path: Path) -> None:
         """Open a downloaded/cached file in the operating system's default viewer (Windows, macOS, Linux, Android Termux)."""

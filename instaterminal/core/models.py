@@ -17,6 +17,14 @@ class UserShort:
     is_verified: bool = False
     is_bestie: bool = False
     latest_reel_media: int = 0
+    follower_count: Optional[int] = None
+    following_count: Optional[int] = None
+    media_count: Optional[int] = None
+    biography: str = ""
+    external_url: str = ""
+    category: str = ""
+    public_email: str = ""
+    public_phone: str = ""
 
 
 @dataclass
@@ -60,6 +68,13 @@ class CommentItem:
     text: str
     created_at: str
     likes_count: int = 0
+    user_full_name: str = ""
+    user_is_verified: bool = False
+    post_code: str = ""
+    post_owner: str = ""
+    post_url: str = ""
+    is_reply: bool = False
+    replied_to: str = ""
 
 
 @dataclass
