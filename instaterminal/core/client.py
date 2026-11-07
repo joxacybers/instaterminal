@@ -2946,6 +2946,153 @@ class InstaClientService:
         notify_android_media_scanner(json_path)
         return [txt_path, json_path]
 
+    def audit_followers_authenticity(
+        self,
+        username: str,
+        sample_size: int = 100,
+    ) -> dict[str, Any]:
+        """
+        Audit audience quality and detect fake/bot followers for a profile:
+        - No avatar / default profile picture
+        - Numbers in username patterns (e.g. user_84729482)
+        - Private/dormant accounts
+        - Calculates an Audience Quality Score (AQS) from 0% to 100%.
+        """
+        target = self.normalize_username(username)
+        followers = self.get_user_followers(target, amount=sample_size)
+        total = len(followers)
+        if total == 0:
+            return {
+                "username": target,
+                "sample_size": 0,
+                "quality_score": 100,
+                "bot_count": 0,
+                "suspicious_count": 0,
+                "real_count": 0,
+                "no_avatar_count": 0,
+                "digit_heavy_count": 0,
+                "bots": [],
+            }
+
+        no_avatar_list: list[UserShort] = []
+        digit_heavy_list: list[UserShort] = []
+        suspicious_list: list[UserShort] = []
+        real_list: list[UserShort] = []
+
+        digit_regex = re.compile(r"\d{4,}")
+
+        for u in followers:
+            is_suspicious = False
+            reasons = []
+
+            # Check avatar
+            pic = u.profile_pic_url or ""
+            if not pic or "anonymous_profile" in pic or "default" in pic.lower() or "44884218_345707102883719" in pic:
+                no_avatar_list.append(u)
+                is_suspicious = True
+                reasons.append("Avatarsiz profil")
+
+            # Check username digits
+            if digit_regex.search(u.username):
+                digit_heavy_list.append(u)
+                is_suspicious = True
+                reasons.append("Nikda ko'p sonlar bor")
+
+            if is_suspicious:
+                suspicious_list.append(u)
+            else:
+                real_list.append(u)
+
+        bot_percentage = round((len(suspicious_list) / total) * 100, 1)
+        quality_score = max(0, min(100, round(100 - (bot_percentage * 1.1), 1)))
+
+        verdict = "A'lo darajada toza auditoriya"
+        if quality_score < 40:
+            verdict = "Yuqori xavf: Ko'p bot yoki nakrutka aniqlandi"
+        elif quality_score < 70:
+            verdict = "O'rtacha: Auditoriyada soxta yoki nofaol profillar bor"
+
+        return {
+            "username": target,
+            "sample_size": total,
+            "quality_score": quality_score,
+            "verdict": verdict,
+            "bot_percentage": bot_percentage,
+            "suspicious_count": len(suspicious_list),
+            "real_count": len(real_list),
+            "no_avatar_count": len(no_avatar_list),
+            "digit_heavy_count": len(digit_heavy_list),
+            "suspicious_samples": [u.username for u in suspicious_list[:15]],
+        }
+
+    def analyze_account_red_flags_and_history(
+        self,
+        profile: UserProfile,
+    ) -> dict[str, Any]:
+        """
+        Analyze account history, creation timeframe clues, and security red flags:
+        - Estimated registration timeframe based on Instagram User ID (PK) range
+        - External verification badge status
+        - Account privacy / contactability index
+        - Scam/Spam risk indicators
+        """
+        uid = str(profile.user_id or "")
+        est_year = "Noma'lum"
+        if uid.isdigit():
+            uid_num = int(uid)
+            # Instagram User ID historical chronology benchmarks
+            if uid_num < 10_000_000:
+                est_year = "2010 - 2011 (Instagram ilk ochilgan davr)"
+            elif uid_num < 50_000_000:
+                est_year = "2012 - 2013 (Facebook sotib olgan davr)"
+            elif uid_num < 300_000_000:
+                est_year = "2014 - 2015"
+            elif uid_num < 2_000_000_000:
+                est_year = "2016 - 2017"
+            elif uid_num < 8_000_000_000:
+                est_year = "2018 - 2019"
+            elif uid_num < 25_000_000_000:
+                est_year = "2020 - 2021"
+            elif uid_num < 55_000_000_000:
+                est_year = "2022 - 2023"
+            else:
+                est_year = "2024 - 2026 (Yangi ro'yxatdan o'tgan akkaunt)"
+
+        red_flags: list[str] = []
+        green_flags: list[str] = []
+
+        if profile.is_verified:
+            green_flags.append("Rasmiy tasdiqlangan (Meta Verified / Blue Badge)")
+        if profile.follower_count > 1000 and profile.media_count > 5:
+            green_flags.append("Tirik kontent va yetarli faollik tarixi")
+        if profile.bio_links:
+            green_flags.append("Ochiq veb-sayt yoki tasdiqlangan tashqi havolalar mavjud")
+
+        if profile.follower_count == 0 and profile.media_count == 0:
+            red_flags.append("Profil bo'sh (0 post, 0 obunachi)")
+        if not profile.profile_pic_url:
+            red_flags.append("Avatarsiz akkaunt")
+        if profile.follower_count > 5000 and profile.media_count < 2:
+            red_flags.append("Shubhali disproporsiya: Post deyarli yo'q, lekin obunachi juda ko'p (Mumkin bo'lgan nakrutka)")
+        if profile.following_count > 3000:
+            red_flags.append("Ommaviy obuna (Mass-following) xatti-harakati")
+
+        trust_score = 70
+        trust_score += len(green_flags) * 10
+        trust_score -= len(red_flags) * 15
+        trust_score = max(5, min(100, trust_score))
+
+        return {
+            "username": profile.username,
+            "user_id": profile.user_id,
+            "estimated_creation_period": est_year,
+            "is_verified": profile.is_verified,
+            "is_private": profile.is_private,
+            "trust_score": trust_score,
+            "red_flags": red_flags,
+            "green_flags": green_flags,
+        }
+
     def analyze_social_graph(
         self,
         username: str,

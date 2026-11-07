@@ -1038,6 +1038,69 @@ def render_contacts_to_terminal(data: dict[str, Any]) -> None:
     console.print(c_table)
 
 
+def render_history_and_red_flags_to_terminal(data: dict[str, Any]) -> None:
+    """Render account history, creation timeframe, and trust score assessment."""
+    uname = data.get("username") or ""
+    console.print()
+    console.print(
+        Rule(
+            f"[bold bright_magenta]🏛️ @{uname} — Akkaunt Tarixi va Xavfsizlik Indeksi (Trust Score)[/bold bright_magenta]",
+            style="magenta",
+        )
+    )
+    score = data.get("trust_score", 50)
+    score_style = "bold bright_green" if score >= 70 else ("bold bright_yellow" if score >= 40 else "bold bright_red")
+
+    panel_text = (
+        f"[bold white]• User ID (Doimiy PK): [bold cyan]{data.get('user_id')}[/bold cyan]\n"
+        f"• Ro'yxatdan o'tgan taxminiy davri: [bold bright_yellow]{data.get('estimated_creation_period')}[/bold bright_yellow]\n"
+        f"• Ishonch reytingi (Trust Score): [{score_style}]{score} / 100[/{score_style}]\n"
+        f"• Tasdiqlangan (Meta Verified): {'✅ Ha' if data.get('is_verified') else 'Yo\'q'}\n"
+        f"• Maxfiylik: {'🔒 Yopiq (Private)' if data.get('is_private') else '🌍 Ochiq (Public)'}[/bold white]"
+    )
+    console.print(Panel(panel_text, border_style="bright_magenta"))
+
+    t = Table(box=box.ROUNDED, expand=True)
+    t.add_column("Ijobiy Belgilar (Green Flags)", style="green", ratio=1)
+    t.add_column("Xavf / Shubhali Belgilar (Red Flags)", style="red", ratio=1)
+
+    gf = data.get("green_flags") or []
+    rf = data.get("red_flags") or []
+    max_len = max(len(gf), len(rf), 1)
+    for i in range(max_len):
+        g_txt = f"✓ {gf[i]}" if i < len(gf) else ""
+        r_txt = f"⚠ {rf[i]}" if i < len(rf) else ""
+        t.add_row(g_txt, r_txt)
+    console.print(t)
+
+
+def render_fake_audit_to_terminal(data: dict[str, Any]) -> None:
+    """Render bot / fake follower audit report."""
+    uname = data.get("username") or ""
+    console.print()
+    console.print(
+        Rule(
+            f"[bold bright_red]🤖 @{uname} — Bot va Nakrutka Auditi (Fake Follower Detection)[/bold bright_red]",
+            style="red",
+        )
+    )
+    score = data.get("quality_score", 50)
+    score_style = "bold bright_green" if score >= 70 else ("bold bright_yellow" if score >= 40 else "bold bright_red")
+
+    summary = (
+        f"[bold white]• Tekshirilgan tanlanma hajmi: [bold cyan]{data.get('sample_size')} ta obunachi[/bold cyan]\n"
+        f"• Auditoriya Sifat Ko'rsatkichi (AQS): [{score_style}]{score}%[/{score_style}] ([italic]{data.get('verdict')}[/italic])\n"
+        f"• Shubhali / Bot obunachilar ulushi: [bold red]{data.get('bot_percentage')}% ({data.get('suspicious_count')} ta)[/bold red]\n"
+        f"• Tirik / Haqiqiy obunachilar ulushi: [bold green]{100 - data.get('bot_percentage', 0):.1f}% ({data.get('real_count')} ta)[/bold green]\n"
+        f"• Avatarsiz profillar: {data.get('no_avatar_count')} ta | Nikida ko'p sonli botlar: {data.get('digit_heavy_count')} ta[/bold white]"
+    )
+    console.print(Panel(summary, border_style="bright_red"))
+
+    samples = data.get("suspicious_samples") or []
+    if samples:
+        console.print(f"[dim]Topilgan ayrim shubhali profillar: {', '.join('@' + s for s in samples)}[/dim]")
+
+
 def print_help() -> None:
     """Display interactive CLI commands."""
     help_table = Table(
@@ -1050,6 +1113,8 @@ def print_help() -> None:
     help_table.add_row("<username> yoki @username", "Istalgan Instagram profilni qidirish va barcha real ma'lumotlarini chiqarish")
     help_table.add_row("save all (yoki all / dl all)", "🚀 PROFILNING HAMMA NARSASINI yuklab olish")
     help_table.add_row("dossier (yoki report / osint report)", "📊 To'liq HTML OSINT Razvedka Dosyesi yaratish va ochish")
+    help_table.add_row("history (yoki about / trust)", "🏛️ Akkaunt tarixi, ochilgan davri va Ishonch indeksi (Trust Score)")
+    help_table.add_row("fake_audit (yoki bot_audit / audit)", "🤖 Bot va nakrutka auditi (Audience Quality Score %)")
     help_table.add_row("locations (yoki places / loc)", "📍 Profil postlaridagi barcha geolokatsiyalar va Google Maps xaritasi")
     help_table.add_row("inner_circle (yoki circle / friends)", "🤝 Yaqin doirasi (eng ko'p belgilanganlar, hammualliflar reytingi)")
     help_table.add_row("activity (yoki time / timeline)", "⏰ 24 soatlik faollik grafigi, haftalik faol kunlar va taxminiy uyqu rejimi")
@@ -1665,6 +1730,33 @@ def run_interactive_loop(
                 render_contacts_to_terminal(c_data)
             except Exception as exc:
                 console.print(f"[bold red]❌ Kontaktlarni tahlil qilishda xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("history", "about", "trust", "account_history"):
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
+                continue
+            try:
+                with console.status(f"[bold magenta]🏛️ @{target_p.username} akkaunt tarixi va ishonch reytingi tekshirilmoqda...[/bold magenta]", spinner="dots"):
+                    h_data = service.analyze_account_red_flags_and_history(target_p)
+                render_history_and_red_flags_to_terminal(h_data)
+            except Exception as exc:
+                console.print(f"[bold red]❌ Tarixni tahlil qilishda xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("fake_audit", "bot_audit", "audit", "bots", "nakrutka"):
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
+                continue
+            amt = int(arg) if arg.isdigit() else 100
+            try:
+                with console.status(f"[bold red]🤖 @{target_p.username} obunachilaridan {amt} tasi bot/nakrutkaga tekshirilmoqda...[/bold red]", spinner="dots"):
+                    audit_res = service.audit_followers_authenticity(target_p.username, sample_size=amt)
+                render_fake_audit_to_terminal(audit_res)
+            except Exception as exc:
+                console.print(f"[bold red]❌ Bot auditida xatolik: {exc}[/bold red]")
             continue
 
         if cmd in ("dossier", "report", "osint_report", "html_report"):
