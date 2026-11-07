@@ -106,6 +106,9 @@ class PostItem:
     resources: list[dict[str, Any]] = field(default_factory=list)
     has_liked: bool = False
     location: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    tagged_users: list[str] = field(default_factory=list)
     comments: list[CommentItem] = field(default_factory=list)
 
     @property

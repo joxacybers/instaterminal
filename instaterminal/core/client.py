@@ -170,6 +170,23 @@ class _LightweightV1Client:
         loc_raw = m.get("location")
         loc_obj = _AttrObj(loc_raw) if isinstance(loc_raw, dict) else None
 
+        # Extract tagged users from usertags
+        tagged_users: list[str] = []
+        for ut in (m.get("usertags") or {}).get("in") or []:
+            if isinstance(ut, dict):
+                u_obj = ut.get("user") or {}
+                if isinstance(u_obj, dict) and u_obj.get("username"):
+                    tagged_users.append(str(u_obj["username"]))
+
+        # Extract coauthors
+        coauthors: list[str] = []
+        for ca in m.get("coauthor_producers") or []:
+            if isinstance(ca, dict) and ca.get("username"):
+                coauthors.append(str(ca["username"]))
+
+        lat_val = float(loc_raw["lat"]) if isinstance(loc_raw, dict) and loc_raw.get("lat") is not None else None
+        lng_val = float(loc_raw["lng"]) if isinstance(loc_raw, dict) and loc_raw.get("lng") is not None else None
+
         return _AttrObj(
             {
                 "pk": str(m.get("pk") or m.get("id") or ""),
@@ -188,6 +205,10 @@ class _LightweightV1Client:
                 "play_count": int(m.get("play_count") or m.get("view_count") or 0),
                 "resources": resources,
                 "location": loc_obj,
+                "lat": lat_val,
+                "lng": lng_val,
+                "tagged_users": tagged_users,
+                "coauthors": coauthors,
             }
         )
 
@@ -2063,6 +2084,10 @@ class InstaClientService:
                 play_cnt = int(getattr(m, "play_count", 0) or getattr(m, "view_count", 0) or 0)
                 loc_obj = getattr(m, "location", None)
                 loc_name = str(getattr(loc_obj, "name", "") or "") if loc_obj else None
+                lat_val = getattr(m, "lat", None)
+                lng_val = getattr(m, "lng", None)
+                tagged_u = list(getattr(m, "tagged_users", None) or [])
+                coauthors_u = list(getattr(m, "coauthors", None) or [])
 
                 posts.append(
                     PostItem(
@@ -2084,6 +2109,10 @@ class InstaClientService:
                         play_count=play_cnt,
                         resources=res_list,
                         location=loc_name or None,
+                        lat=lat_val,
+                        lng=lng_val,
+                        tagged_users=tagged_u,
+                        coauthors=coauthors_u,
                     )
                 )
         except Exception:
@@ -2917,7 +2946,510 @@ class InstaClientService:
         notify_android_media_scanner(json_path)
         return [txt_path, json_path]
 
-    def open_in_system_viewer(self, file_path: Path) -> None:
+    def analyze_social_graph(
+        self,
+        username: str,
+        max_users: int = 500,
+    ) -> dict[str, Any]:
+        """
+        Analyze social graph of a user:
+        - not_following_back: Accounts that user follows, but they do NOT follow user back.
+        - fans: Accounts that follow user, but user does NOT follow them back.
+        - mutual: Mutual friends (both follow each other).
+        """
+        target = self.normalize_username(username)
+        followers = self.get_user_followers(target, amount=max_users)
+        following = self.get_user_following(target, amount=max_users)
+
+        followers_map = {u.username.lower(): u for u in followers}
+        following_map = {u.username.lower(): u for u in following}
+
+        followers_set = set(followers_map.keys())
+        following_set = set(following_map.keys())
+
+        not_following_back = [following_map[u] for u in (following_set - followers_set)]
+        fans = [followers_map[u] for u in (followers_set - following_set)]
+        mutual = [following_map[u] for u in (following_set & followers_set)]
+
+        return {
+            "username": target,
+            "followers_count": len(followers),
+            "following_count": len(following),
+            "not_following_back": not_following_back,
+            "fans": fans,
+            "mutual": mutual,
+        }
+
+    def analyze_mutual_between_users(
+        self,
+        user1: str,
+        user2: str,
+        max_users: int = 500,
+    ) -> dict[str, Any]:
+        """
+        Analyze mutual connections between two distinct Instagram users:
+        - Common followers (who follows both user1 and user2)
+        - Common followings (who both user1 and user2 follow)
+        """
+        u1_clean = self.normalize_username(user1)
+        u2_clean = self.normalize_username(user2)
+
+        u1_followers = self.get_user_followers(u1_clean, amount=max_users)
+        u2_followers = self.get_user_followers(u2_clean, amount=max_users)
+
+        u1_following = self.get_user_following(u1_clean, amount=max_users)
+        u2_following = self.get_user_following(u2_clean, amount=max_users)
+
+        u1_f_map = {u.username.lower(): u for u in u1_followers}
+        u2_f_map = {u.username.lower(): u for u in u2_followers}
+        u1_fol_map = {u.username.lower(): u for u in u1_following}
+        u2_fol_map = {u.username.lower(): u for u in u2_following}
+
+        common_followers = [u1_f_map[u] for u in (set(u1_f_map.keys()) & set(u2_f_map.keys()))]
+        common_followings = [u1_fol_map[u] for u in (set(u1_fol_map.keys()) & set(u2_fol_map.keys()))]
+
+        return {
+            "user1": u1_clean,
+            "user2": u2_clean,
+            "common_followers": common_followers,
+            "common_followings": common_followings,
+        }
+
+    def analyze_locations(self, profile: UserProfile, max_posts: int = 50) -> dict[str, Any]:
+        """
+        Extract and aggregate all locations (names, coordinates, post codes) from profile posts.
+        """
+        posts = profile.posts
+        if len(posts) < max_posts and not profile.is_private and profile.user_id:
+            try:
+                more = self.fetch_all_user_posts(profile.user_id, max_amount=max_posts)
+                if more:
+                    posts = more
+            except Exception:
+                pass
+
+        location_stats: dict[str, dict[str, Any]] = {}
+        for p in posts:
+            loc = p.location
+            if not loc:
+                continue
+            entry = location_stats.setdefault(
+                loc,
+                {
+                    "name": loc,
+                    "count": 0,
+                    "lat": p.lat,
+                    "lng": p.lng,
+                    "posts": [],
+                    "latest_date": p.created_at,
+                },
+            )
+            entry["count"] += 1
+            if p.lat and not entry["lat"]:
+                entry["lat"] = p.lat
+            if p.lng and not entry["lng"]:
+                entry["lng"] = p.lng
+            entry["posts"].append(
+                {
+                    "code": p.code,
+                    "date": p.created_at,
+                    "url": p.post_url,
+                }
+            )
+
+        sorted_locs = sorted(location_stats.values(), key=lambda x: x["count"], reverse=True)
+        return {
+            "username": profile.username,
+            "total_posts_analyzed": len(posts),
+            "locations_found": len(sorted_locs),
+            "locations": sorted_locs,
+        }
+
+    def analyze_inner_circle(
+        self,
+        profile: UserProfile,
+        max_posts: int = 50,
+        comments_per_post: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Calculate the user's real-life "Inner Circle" by weighting:
+        - Coauthors (+10 points)
+        - Tagged users in media (+5 points)
+        - Mentions in captions (+3 points)
+        - Comment interactions / replies (+2 points)
+        """
+        posts = profile.posts
+        if len(posts) < max_posts and not profile.is_private and profile.user_id:
+            try:
+                more = self.fetch_all_user_posts(profile.user_id, max_amount=max_posts)
+                if more:
+                    posts = more
+            except Exception:
+                pass
+
+        circle_scores: dict[str, dict[str, Any]] = {}
+
+        def _get_entry(uname: str) -> dict[str, Any]:
+            clean = uname.lower().lstrip("@")
+            return circle_scores.setdefault(
+                clean,
+                {
+                    "username": clean,
+                    "score": 0,
+                    "coauthor_count": 0,
+                    "tagged_count": 0,
+                    "mention_count": 0,
+                    "comment_count": 0,
+                    "reasons": [],
+                },
+            )
+
+        for p in posts:
+            for ca in p.coauthors:
+                if ca.lower() != profile.username.lower():
+                    e = _get_entry(ca)
+                    e["score"] += 10
+                    e["coauthor_count"] += 1
+                    e["reasons"].append(f"Post {p.code} hammuallifi (coauthor)")
+
+            for tu in p.tagged_users:
+                if tu.lower() != profile.username.lower():
+                    e = _get_entry(tu)
+                    e["score"] += 5
+                    e["tagged_count"] += 1
+                    e["reasons"].append(f"Post {p.code} da rasmga belgilangan (tagged)")
+
+            mentions = re.findall(r"@([A-Za-z0-9_.]+)", p.caption)
+            for m_user in mentions:
+                if m_user.lower() != profile.username.lower():
+                    e = _get_entry(m_user)
+                    e["score"] += 3
+                    e["mention_count"] += 1
+
+            if p.comment_count > 0:
+                comments = self.fetch_post_comments(p, amount=comments_per_post)
+                for c in comments:
+                    cu = c.username.lower()
+                    if cu != profile.username.lower():
+                        e = _get_entry(cu)
+                        e["score"] += 2
+                        e["comment_count"] += 1
+
+        ranked = sorted(circle_scores.values(), key=lambda x: x["score"], reverse=True)
+        return {
+            "username": profile.username,
+            "posts_analyzed": len(posts),
+            "inner_circle": ranked[:20],
+        }
+
+    def analyze_activity_time(self, profile: UserProfile, max_posts: int = 100) -> dict[str, Any]:
+        """
+        Analyze posting & activity times (hours of the day 0..23 and days of the week Mon..Sun)
+        to deduce sleep schedule, active timezone, and peak habits.
+        """
+        posts = profile.posts
+        if len(posts) < max_posts and not profile.is_private and profile.user_id:
+            try:
+                more = self.fetch_all_user_posts(profile.user_id, max_amount=max_posts)
+                if more:
+                    posts = more
+            except Exception:
+                pass
+
+        hours_hist = [0] * 24
+        days_hist = {
+            "Dushanba (Mon)": 0,
+            "Seshanba (Tue)": 0,
+            "Chorshanba (Wed)": 0,
+            "Payshanba (Thu)": 0,
+            "Juma (Fri)": 0,
+            "Shanba (Sat)": 0,
+            "Yakshanba (Sun)": 0,
+        }
+        day_keys = list(days_hist.keys())
+
+        valid_timestamps = []
+        for p in posts:
+            ts = p.timestamp
+            if ts <= 0 and p.created_at:
+                try:
+                    dt = datetime.strptime(p.created_at, "%Y-%m-%d %H:%M:%S")
+                    ts = int(dt.timestamp())
+                except Exception:
+                    pass
+            if ts > 0:
+                valid_timestamps.append(ts)
+                dt = datetime.fromtimestamp(ts)
+                hours_hist[dt.hour] += 1
+                days_hist[day_keys[dt.weekday()]] += 1
+
+        # Also add comments timestamps if available
+        for p in posts:
+            for c in p.comments:
+                if c.created_at:
+                    try:
+                        dt = datetime.strptime(c.created_at, "%Y-%m-%d %H:%M")
+                        hours_hist[dt.hour] += 1
+                        days_hist[day_keys[dt.weekday()]] += 1
+                        valid_timestamps.append(int(dt.timestamp()))
+                    except Exception:
+                        pass
+
+        # Calculate deduced sleeping hours (consecutive 4-6 hours with minimum activity)
+        min_window_sum = 999999
+        sleep_start_hour = 2
+        for h in range(24):
+            window_sum = sum(hours_hist[(h + i) % 24] for i in range(5))
+            if window_sum < min_window_sum:
+                min_window_sum = window_sum
+                sleep_start_hour = h
+
+        sleep_est = f"{sleep_start_hour:02d}:00 - {(sleep_start_hour + 5) % 24:02d}:00"
+
+        peak_hour = int(hours_hist.index(max(hours_hist))) if any(hours_hist) else 12
+        peak_day = max(days_hist.items(), key=lambda x: x[1])[0] if any(days_hist.values()) else "Noma'lum"
+
+        return {
+            "username": profile.username,
+            "total_events": len(valid_timestamps),
+            "hours_distribution": hours_hist,
+            "days_distribution": days_hist,
+            "peak_hour": f"{peak_hour:02d}:00 - {(peak_hour+1)%24:02d}:00",
+            "peak_day": peak_day,
+            "estimated_sleep_window": sleep_est,
+        }
+
+    def analyze_contacts_and_interests(self, profile: UserProfile) -> dict[str, Any]:
+        """
+        Extract emails, phones, Telegram handles, external links, taplinks,
+        and hashtag interest clusters across bio and captions.
+        """
+        all_text = f"{profile.biography} " + " ".join(p.caption for p in profile.posts)
+        for link in profile.bio_links:
+            all_text += f" {link}"
+        if profile.external_url:
+            all_text += f" {profile.external_url}"
+
+        # Emails
+        emails = sorted(list(set(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}", all_text))))
+        if profile.public_email and profile.public_email not in emails:
+            emails.append(profile.public_email)
+
+        # Phone numbers
+        phones = sorted(list(set(re.findall(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{2,4}", all_text))))
+        phones = [p.strip() for p in phones if len(re.sub(r"\D", "", p)) >= 9]
+        if profile.contact_phone_number and profile.contact_phone_number not in phones:
+            phones.append(profile.contact_phone_number)
+
+        # Telegram links / handles
+        telegram_matches = sorted(list(set(re.findall(r"(?:t\.me/|telegram\.me/|@)([A-Za-z0-9_]{5,32})", all_text))))
+        telegram = [t for t in telegram_matches if t.lower() != profile.username.lower()]
+
+        # Hashtags
+        hashtags = [h.lower() for h in re.findall(r"#([A-Za-z0-9_]+)", all_text)]
+        tag_counts: dict[str, int] = {}
+        for h in hashtags:
+            tag_counts[h] = tag_counts.get(h, 0) + 1
+        sorted_hashtags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:25]
+
+        # External domains
+        urls = sorted(list(set(re.findall(r"https?://[^\s/$.?#].[^\s]*", all_text))))
+
+        return {
+            "username": profile.username,
+            "emails": emails,
+            "phones": phones,
+            "telegram": telegram,
+            "hashtags": sorted_hashtags,
+            "urls": urls,
+        }
+
+    def generate_html_osint_dossier(
+        self,
+        profile: UserProfile,
+        social_graph: Optional[dict[str, Any]] = None,
+        locations: Optional[dict[str, Any]] = None,
+        inner_circle: Optional[dict[str, Any]] = None,
+        activity: Optional[dict[str, Any]] = None,
+        contacts: Optional[dict[str, Any]] = None,
+        target_dir: Optional[Path] = None,
+    ) -> Path:
+        """
+        Generate a comprehensive, beautiful, single-page HTML OSINT intelligence report
+        dossier saved into <downloads_dir>/@<username>/info/dossier_<timestamp>.html.
+        """
+        uname = self.normalize_username(profile.username)
+        out_dir = target_dir or get_user_category_dir(uname, "info")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_file = out_dir / f"{uname}_OSINT_dossier_{timestamp}.html"
+
+        if locations is None:
+            locations = self.analyze_locations(profile)
+        if inner_circle is None:
+            inner_circle = self.analyze_inner_circle(profile)
+        if activity is None:
+            activity = self.analyze_activity_time(profile)
+        if contacts is None:
+            contacts = self.analyze_contacts_and_interests(profile)
+
+        # Build HTML content
+        loc_rows = "".join(
+            f"<tr><td>{html.escape(str(l['name']))}</td><td>{l['count']}</td>"
+            f"<td>{'<a href=\"https://www.google.com/maps?q=' + str(l['lat']) + ',' + str(l['lng']) + '\" target=\"_blank\">Google Maps</a>' if l.get('lat') else '-'}</td>"
+            f"<td>{html.escape(str(l.get('latest_date') or '-'))}</td></tr>"
+            for l in locations.get("locations", [])[:15]
+        ) or "<tr><td colspan='4'>Geolokatsiyalar topilmadi</td></tr>"
+
+        circle_rows = "".join(
+            f"<tr><td><strong>@{html.escape(str(c['username']))}</strong></td>"
+            f"<td><span class='badge score'>{c['score']} ball</span></td>"
+            f"<td>{c['coauthor_count']}</td><td>{c['tagged_count']}</td><td>{c['comment_count']}</td>"
+            f"<td>{html.escape(', '.join(c['reasons'][:2])) or '-'}</td></tr>"
+            for c in inner_circle.get("inner_circle", [])[:15]
+        ) or "<tr><td colspan='6'>Yaqin doirasi ma'lumotlari topilmadi</td></tr>"
+
+        # Hours chart bars
+        hours_bars = ""
+        max_h = max(activity.get("hours_distribution", [1])) or 1
+        for h, cnt in enumerate(activity.get("hours_distribution", [])):
+            pct = int((cnt / max_h) * 100) if max_h > 0 else 0
+            hours_bars += f"<div class='bar-col'><div class='bar' style='height:{pct}%;' title='{h:02d}:00 ({cnt} ta)'></div><span>{h}</span></div>"
+
+        # Days list
+        days_html = "".join(
+            f"<div class='day-item'><span>{d}:</span> <strong>{cnt} ta</strong></div>"
+            for d, cnt in activity.get("days_distribution", {}).items()
+        )
+
+        contacts_html = ""
+        if contacts.get("emails"):
+            contacts_html += f"<p>📧 <strong>Email:</strong> {', '.join(html.escape(e) for e in contacts['emails'])}</p>"
+        if contacts.get("phones"):
+            contacts_html += f"<p>📞 <strong>Telefon:</strong> {', '.join(html.escape(p) for p in contacts['phones'])}</p>"
+        if contacts.get("telegram"):
+            contacts_html += f"<p>✈️ <strong>Telegram:</strong> {', '.join('@' + html.escape(t) for t in contacts['telegram'])}</p>"
+        if contacts.get("urls"):
+            contacts_html += f"<p>🔗 <strong>Havolalar:</strong> {', '.join(f'<a href=\"{html.escape(u)}\" target=\"_blank\">{html.escape(u[:40])}</a>' for u in contacts['urls'])}</p>"
+        if not contacts_html:
+            contacts_html = "<p>Ochiq kontaktlar topilmadi.</p>"
+
+        tags_html = "".join(
+            f"<span class='badge tag'>#{html.escape(t)} ({cnt})</span> "
+            for t, cnt in contacts.get("hashtags", [])[:20]
+        ) or "<span>Hechteglar yo'q</span>"
+
+        social_summary = ""
+        if social_graph:
+            social_summary = f"""
+            <div class='card'>
+                <h2>🔄 Ijtimoiy Aloqalar (Social Graph)</h2>
+                <p>• Siz/Nishon kuzatadi, lekin qaytarib kuzatmaydi (Not Following Back): <strong>{len(social_graph.get('not_following_back', []))} ta</strong></p>
+                <p>• Muxlislar (Fans - nishonga obuna bo'lganlar): <strong>{len(social_graph.get('fans', []))} ta</strong></p>
+                <p>• O'zaro do'stlar (Mutual Friends): <strong>{len(social_graph.get('mutual', []))} ta</strong></p>
+            </div>
+            """
+
+        html_template = f"""<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <title>InstaTerminal OSINT Dosye: @{html.escape(profile.username)}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 24px; }}
+        .container {{ max-width: 1080px; margin: 0 auto; }}
+        header {{ display: flex; align-items: center; gap: 24px; padding: 24px; background: #1e293b; border-radius: 12px; margin-bottom: 24px; border: 1px solid #334155; }}
+        header img {{ width: 110px; height: 110px; border-radius: 50%; object-fit: cover; border: 3px solid #38bdf8; }}
+        .header-info h1 {{ margin: 0 0 8px 0; font-size: 28px; color: #38bdf8; }}
+        .badge {{ display: inline-block; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: bold; background: #334155; color: #94a3b8; }}
+        .badge.verified {{ background: #0284c7; color: white; }}
+        .badge.score {{ background: #10b981; color: white; }}
+        .badge.tag {{ background: #475569; color: #f1f5f9; margin-bottom: 4px; }}
+        .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }}
+        .card {{ background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }}
+        .card h2 {{ margin-top: 0; font-size: 18px; color: #f1f5f9; border-bottom: 1px solid #334155; padding-bottom: 8px; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }}
+        th, td {{ padding: 8px 10px; text-align: left; border-bottom: 1px solid #334155; }}
+        th {{ background: #0f172a; color: #94a3b8; }}
+        .chart-container {{ display: flex; align-items: flex-end; height: 120px; gap: 4px; padding-top: 20px; }}
+        .bar-col {{ flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; }}
+        .bar {{ width: 100%; background: #38bdf8; border-radius: 3px 3px 0 0; min-height: 2px; }}
+        .bar-col span {{ font-size: 10px; color: #64748b; margin-top: 4px; }}
+        .days-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-top: 12px; }}
+        .day-item {{ background: #0f172a; padding: 8px; border-radius: 6px; font-size: 12px; border: 1px solid #334155; }}
+        footer {{ text-align: center; color: #64748b; font-size: 12px; margin-top: 40px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <img src="{html.escape(profile.profile_pic_url or '')}" alt="Avatar">
+            <div class="header-info">
+                <h1>@{html.escape(profile.username)} {'<span class="badge verified">✓ Verified</span>' if profile.is_verified else ''}</h1>
+                <p><strong>{html.escape(profile.full_name or '')}</strong> • ID: <code>{html.escape(profile.user_id or '')}</code> • Holati: <strong>{'🔒 Yopiq' if profile.is_private else '🌍 Ochiq'}</strong></p>
+                <p>👥 <strong>{profile.follower_count:,}</strong> obunachi • 👣 <strong>{profile.following_count:,}</strong> obuna • 📸 <strong>{profile.media_count:,}</strong> post</p>
+                <p class="bio">{html.escape(profile.biography or '')}</p>
+            </div>
+        </header>
+
+        {social_summary}
+
+        <div class="grid">
+            <div class="card">
+                <h2>📞 Razvedka Kontaktlari & Manzillari</h2>
+                {contacts_html}
+            </div>
+            <div class="card">
+                <h2>🏷️ Qiziqish Sohalari (Top Hechteglar)</h2>
+                {tags_html}
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom: 24px;">
+            <h2>⏰ Faollik Grafigi & Uyqu Rejimi (Activity Timeline)</h2>
+            <p>• Eng faol soat oralig'i: <strong>{activity.get('peak_hour')}</strong> | Eng faol kun: <strong>{activity.get('peak_day')}</strong></p>
+            <p>• Taxminiy uyqu rejimi (Kam faollik soatlari): <strong>{activity.get('estimated_sleep_window')}</strong></p>
+            <div class="chart-container">
+                {hours_bars}
+            </div>
+            <div class="days-grid">
+                {days_html}
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom: 24px;">
+            <h2>🤝 Yaqin Doirasi (Inner Circle & Affiliates)</h2>
+            <table>
+                <thead>
+                    <tr><th>Foydalanuvchi</th><th>OSINT Balli</th><th>Hammuallif</th><th>Belgilangan</th><th>Kommentlar</th><th>Asos</th></tr>
+                </thead>
+                <tbody>
+                    {circle_rows}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card" style="margin-bottom: 24px;">
+            <h2>📍 Geolokatsiyalar & Joylashuv Xaritasi</h2>
+            <table>
+                <thead>
+                    <tr><th>Joy nomi</th><th>Postlar soni</th><th>Xarita</th><th>Oxirgi borgan sana</th></tr>
+                </thead>
+                <tbody>
+                    {loc_rows}
+                </tbody>
+            </table>
+        </div>
+
+        <footer>
+            <p>InstaTerminal OSINT Intelligence Suite • Sana: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+        </footer>
+    </div>
+</body>
+</html>"""
+        report_file.write_text(html_template, encoding="utf-8")
+        notify_android_media_scanner(report_file)
+        return report_file
         """Open a downloaded/cached file in the operating system's default viewer (Windows, macOS, Linux, Android Termux)."""
         if not file_path or not file_path.exists():
             return

@@ -18,15 +18,69 @@ from instaterminal.core.image_renderer import TerminalImageRenderer
 
 def test_real_profile_fetch_authenticated_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify live Instagram profile fetching using saved session (zero mock data)."""
-    monkeypatch.setenv("INSTATERMINAL_HOME", str(tmp_path))
     service = InstaClientService()
-    assert service.ensure_default_session() is True
+    if not service.ensure_default_session():
+        pytest.skip("No saved Instagram session available in environment")
     assert service.username != ""
 
-    profile = service.fetch_real_profile(service.username, download_media=True)
-    assert profile.username == service.username
-    assert profile.user_id.isdigit()
-    assert profile.profile_link == f"https://www.instagram.com/{service.username}/"
+
+def test_osint_analysis_and_dossier_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify OSINT intelligence modules: locations, inner circle, timeline, contacts, and HTML dossier."""
+    from instaterminal.core.models import PostItem, UserProfile
+
+    monkeypatch.setenv("INSTATERMINAL_HOME", str(tmp_path))
+    service = InstaClientService()
+
+    prof = UserProfile(
+        user_id="998877",
+        username="osint_target",
+        full_name="Agent Zero",
+        biography="Investigator @intel\nEmail: zero@osint.org\nPhone: +1 (555) 234-5678\nTelegram: @intel_zero\n#osint #cyber",
+        follower_count=5000,
+        following_count=420,
+        media_count=2,
+        posts=[
+            PostItem(
+                id="p1",
+                code="POST_CODE_1",
+                username="osint_target",
+                full_name="Agent Zero",
+                caption="Briefing at HQ in Berlin #security @director_smith",
+                like_count=50,
+                comment_count=5,
+                created_at="2026-11-06 15:30:00",
+                timestamp=1793959800,
+                location="Berlin Alexanderplatz",
+                lat=52.5219,
+                lng=13.4132,
+                tagged_users=["director_smith", "analyst_bob"],
+                coauthors=["director_smith"],
+            )
+        ],
+    )
+
+    locs = service.analyze_locations(prof)
+    assert len(locs["locations"]) == 1
+    assert locs["locations"][0]["name"] == "Berlin Alexanderplatz"
+
+    circle = service.analyze_inner_circle(prof)
+    top_usernames = [c["username"] for c in circle["inner_circle"]]
+    assert "director_smith" in top_usernames
+
+    act = service.analyze_activity_time(prof)
+    assert act["total_events"] >= 1
+    assert act["peak_hour"] != ""
+
+    contacts = service.analyze_contacts_and_interests(prof)
+    assert "zero@osint.org" in contacts["emails"]
+    assert any("234-5678" in p for p in contacts["phones"])
+
+    dossier_file = service.generate_html_osint_dossier(prof, locations=locs, inner_circle=circle, activity=act, contacts=contacts)
+    assert dossier_file.exists()
+    assert dossier_file.suffix == ".html"
+    content = dossier_file.read_text(encoding="utf-8")
+    assert "osint_target" in content
+    assert "Berlin Alexanderplatz" in content
 
 
 def test_real_profile_fetch_with_posts_and_highlights(

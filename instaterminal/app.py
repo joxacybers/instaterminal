@@ -893,42 +893,178 @@ def render_osint_comments_to_terminal(osint_data: dict[str, Any]) -> None:
         console.print(tc_table)
 
 
+def render_locations_to_terminal(data: dict[str, Any]) -> None:
+    """Render extracted geographic locations table."""
+    uname = data.get("username") or ""
+    locs = data.get("locations") or []
+    console.print()
+    console.print(
+        Rule(
+            f"[bold bright_cyan]📍 @{uname} — Geolokatsiyalar va Joylashuv Xaritasi ({len(locs)} ta joy topildi)[/bold bright_cyan]",
+            style="cyan",
+        )
+    )
+    if not locs:
+        console.print("[yellow]Postlarda geolokatsiyalar topilmadi.[/yellow]")
+        return
+
+    table = Table(box=box.ROUNDED, border_style="bright_cyan", show_lines=True, expand=True)
+    table.add_column("#", style="bold yellow", width=4, justify="right")
+    table.add_column("Joy / Manzil nomi", style="bold white", ratio=3)
+    table.add_column("Postlar soni", style="bold bright_green", width=14, justify="right")
+    table.add_column("Oxirgi sana", style="green", width=18)
+    table.add_column("Google Maps Xaritasi", style="underline blue", ratio=3)
+
+    for idx, l in enumerate(locs[:25], start=1):
+        map_link = (
+            f"https://www.google.com/maps?q={l['lat']},{l['lng']}"
+            if l.get("lat") and l.get("lng")
+            else f"https://www.google.com/maps/search/{l['name'].replace(' ', '+')}"
+        )
+        table.add_row(
+            str(idx),
+            l["name"],
+            f"{l['count']} ta post",
+            l.get("latest_date") or "-",
+            f"[underline blue]{map_link}[/underline blue]",
+        )
+    console.print(table)
+
+
+def render_inner_circle_to_terminal(data: dict[str, Any]) -> None:
+    """Render user's inner circle network ranking."""
+    uname = data.get("username") or ""
+    circle = data.get("inner_circle") or []
+    console.print()
+    console.print(
+        Rule(
+            f"[bold bright_magenta]🤝 @{uname} — Yaqin Doirasi (Inner Circle & Affiliates)[/bold bright_magenta]",
+            style="magenta",
+        )
+    )
+    if not circle:
+        console.print("[yellow]Yaqin doirasi bo'yicha ma'lumot topilmadi.[/yellow]")
+        return
+
+    table = Table(box=box.ROUNDED, border_style="bright_magenta", show_lines=True, expand=True)
+    table.add_column("#", style="bold yellow", width=4, justify="right")
+    table.add_column("Foydalanuvchi", style="bold bright_white", ratio=2)
+    table.add_column("OSINT Ball", style="bold bright_green", width=12, justify="right")
+    table.add_column("Aloqa Turi", style="cyan", ratio=2)
+    table.add_column("Tafsilotlar (Sabablar)", style="white", ratio=3)
+
+    for idx, c in enumerate(circle[:20], start=1):
+        types_summary = []
+        if c.get("coauthor_count"):
+            types_summary.append(f"🤝 Hammuallif: {c['coauthor_count']}")
+        if c.get("tagged_count"):
+            types_summary.append(f"🏷️ Belgilangan: {c['tagged_count']}")
+        if c.get("mention_count"):
+            types_summary.append(f"💬 Matnda: {c['mention_count']}")
+        if c.get("comment_count"):
+            types_summary.append(f"📝 Komment: {c['comment_count']}")
+
+        reasons = " | ".join(c.get("reasons", [])[:2]) or "-"
+        table.add_row(
+            str(idx),
+            f"@{c['username']}",
+            f"{c['score']} ball",
+            "\n".join(types_summary) or "-",
+            reasons,
+        )
+    console.print(table)
+
+
+def render_activity_time_to_terminal(data: dict[str, Any]) -> None:
+    """Render timeline and sleep schedule analysis."""
+    uname = data.get("username") or ""
+    console.print()
+    console.print(
+        Rule(
+            f"[bold bright_yellow]⏰ @{uname} — Faollik Grafigi va Uyqu Rejimi Tahlili[/bold bright_yellow]",
+            style="yellow",
+        )
+    )
+    console.print(
+        Panel(
+            f"[bold white]• Eng ko'p post va komment qoldirilgan soat: [bold bright_green]{data.get('peak_hour')}[/bold bright_green]\n"
+            f"• Eng faol kun: [bold bright_green]{data.get('peak_day')}[/bold bright_green]\n"
+            f"• Taxminiy uyqu oralig'i (Eng kam faollik soatlari): [bold bright_yellow]{data.get('estimated_sleep_window')}[/bold bright_yellow]\n"
+            f"• Tahlil qilingan jami harakatlar: [bold cyan]{data.get('total_events')} ta[/bold cyan][/bold white]",
+            border_style="bright_yellow",
+        )
+    )
+
+    h_table = Table(title="📊 24 Soatlik Faollik Taqsimoti (00:00 - 23:00)", box=box.SIMPLE_HEAVY, expand=True)
+    h_table.add_column("Soat", style="cyan", width=8)
+    h_table.add_column("Harakatlar", style="bold green", width=12, justify="right")
+    h_table.add_column("Vizual Grafik", style="bright_cyan", ratio=1)
+
+    max_cnt = max(data.get("hours_distribution", [1])) or 1
+    for h, cnt in enumerate(data.get("hours_distribution", [])):
+        bar_len = int((cnt / max_cnt) * 35) if max_cnt > 0 else 0
+        bar_str = "█" * bar_len
+        h_table.add_row(f"{h:02d}:00", f"{cnt} ta", bar_str)
+    console.print(h_table)
+
+
+def render_contacts_to_terminal(data: dict[str, Any]) -> None:
+    """Render parsed external contacts and hashtag interests."""
+    uname = data.get("username") or ""
+    console.print()
+    console.print(
+        Rule(
+            f"[bold bright_green]📞 @{uname} — Razvedka Kontaktlari va Qiziqish Sohalari[/bold bright_green]",
+            style="green",
+        )
+    )
+    emails = data.get("emails") or []
+    phones = data.get("phones") or []
+    telegrams = data.get("telegram") or []
+    urls = data.get("urls") or []
+    hashtags = data.get("hashtags") or []
+
+    c_table = Table(box=box.ROUNDED, border_style="bright_green", expand=True)
+    c_table.add_column("Kategoriya", style="bold yellow", width=20)
+    c_table.add_column("Topilgan Ma'lumotlar", style="white")
+
+    c_table.add_row("📧 Email manzillari", ", ".join(emails) if emails else "[dim]Mavjud emas[/dim]")
+    c_table.add_row("📞 Telefon raqamlari", ", ".join(phones) if phones else "[dim]Mavjud emas[/dim]")
+    c_table.add_row("✈️ Telegram manzillari", ", ".join(f"@{t}" for t in telegrams) if telegrams else "[dim]Mavjud emas[/dim]")
+    c_table.add_row("🔗 Tashqi saytlar / Havolalar", "\n".join(urls[:8]) if urls else "[dim]Mavjud emas[/dim]")
+
+    tag_str = "  ".join(f"[bold cyan]#{t}[/bold cyan] [dim]({cnt})[/dim]" for t, cnt in hashtags[:20])
+    c_table.add_row("🏷️ Top Hechteglar (Qiziqishlar)", tag_str or "[dim]Mavjud emas[/dim]")
+    console.print(c_table)
+
+
 def print_help() -> None:
     """Display interactive CLI commands."""
     help_table = Table(
-        title="⌨️ InstaTerminal — Terminal Buyruqlari va Yuklab Olish Markazi",
+        title="⌨️ InstaTerminal — Professional OSINT Intelligence & Download Suite",
         box=box.ROUNDED,
         border_style="cyan",
     )
-    help_table.add_column("Buyruq", style="bold yellow", width=30)
+    help_table.add_column("Buyruq", style="bold yellow", width=32)
     help_table.add_column("Tavsifi", style="white")
     help_table.add_row("<username> yoki @username", "Istalgan Instagram profilni qidirish va barcha real ma'lumotlarini chiqarish")
-    help_table.add_row("save all (yoki all / dl all)", "🚀 PROFILNING HAMMA NARSASINI (Avatar + Story + HL + Post/Reel + Followers + Info) yuklab olish")
-    help_table.add_row("save avatar", "🖼️ Profilning Full HD avatarini yuklab olish")
-    help_table.add_row("st (yoki st save / save st)", "🔥 Faol 24-soatlik Storylarni ko'rish va barchasini yuklab olish")
-    help_table.add_row("hl <N> (masalan: hl 1)", "✨ N-Highlight ichiga kirish va storylarini tanlab yuklab olish")
-    help_table.add_row("hl save <N>", "✨ N-Highlight ichidagi barcha storylarni darhol yuklab olish")
-    help_table.add_row("hl save all (yoki save hl)", "✨ Profilning BARCHA Highlightlarini (muqova + storylari bilan) yuklab olish")
-    help_table.add_row("save <N> (masalan: save 1)", "📸 N-post, Reel yoki Albomning barcha slaydlarini yuklab olish")
-    help_table.add_row("save posts (yoki save reels)", "📸 Profilning BARCHA postlari, Reels videolari va Albomlarini yuklab olish")
-    help_table.add_row("followers (yoki f)", "👥 Joriy profilning barcha obunachilarini (followers) terminalda ko'rish")
-    help_table.add_row("followers deep [N]", "🕵️ Obunachilarning chuqur ma'lumotlarini (Bio, Ssilka, Obunachi/Post soni) olish")
-    help_table.add_row("following (yoki fol)", "👥 Joriy profilning barcha obunalarini (following) terminalda ko'rish")
-    help_table.add_row("following deep [N]", "🕵️ Obunalarning chuqur ma'lumotlarini (Bio, Ssilka, Obunachi/Post soni) olish")
-    help_table.add_row("save followers / save following", "💾 Obunachilar yoki obunalar ro'yxatini .txt va .json faylga saqlash")
-    help_table.add_row("comments <N> (yoki c <N>)", "💬 N-postdagi barcha ochiq kommentlar va javoblarni (replies) ko'rish va saqlash")
-    help_table.add_row("comments @user2 (yoki c @user2)", "🕵️ Joriy profil (@user1) @user2 ning postlarida nima komment yozganini topish")
-    help_table.add_row("osint (yoki comments scan)", "🕵️ @user1 o'zida va obunalarida qayerga nima komment yozganini avtomatik qidirish")
-    help_table.add_row("save info", "📋 Profil haqidagi to'liq hisobotni (.txt va .json) faylga saqlash")
-    help_table.add_row("dl <URL>", "🔗 Istalgan Instagram Post/Reel/Highlight/Story havolasini (URL) yuklab olish")
-    help_table.add_row("folder (yoki open folder)", "📂 Yuklab olingan fayllar papkasini Windows Explorer'da ochish")
-    help_table.add_row("post <N> / open <N>", "🔍 N-post tafsilotlarini ko'rish yoki tizim pleyerida ochish")
-    help_table.add_row("images yoki img", "🖼️ Joriy profil postlarining rasmlarini terminalda chizish")
-    help_table.add_row("me", "👤 Saqlangan shaxsiy profilingizni ko'rsatish")
-    help_table.add_row("login / logout", "🔐 Instagram akkauntga kirish (sessiyani saqlash) yoki chiqish")
-    help_table.add_row("update", "🔄 GitHub'dan eng oxirgi yangilanishlarni tortib olish (sessiya saqlanib qoladi)")
-    help_table.add_row("json", "🧬 Instagram qaytargan barcha xom (raw) JSON ma'lumotlarni ko'rish")
-    help_table.add_row("clear / cls", "🧹 Terminal ekranini tozalash")
+    help_table.add_row("save all (yoki all / dl all)", "🚀 PROFILNING HAMMA NARSASINI yuklab olish")
+    help_table.add_row("dossier (yoki report / osint report)", "📊 To'liq HTML OSINT Razvedka Dosyesi yaratish va ochish")
+    help_table.add_row("locations (yoki places / loc)", "📍 Profil postlaridagi barcha geolokatsiyalar va Google Maps xaritasi")
+    help_table.add_row("inner_circle (yoki circle / friends)", "🤝 Yaqin doirasi (eng ko'p belgilanganlar, hammualliflar reytingi)")
+    help_table.add_row("activity (yoki time / timeline)", "⏰ 24 soatlik faollik grafigi, haftalik faol kunlar va taxminiy uyqu rejimi")
+    help_table.add_row("contacts (yoki emails / phones)", "📞 Bio va postlardan email, telefon, Telegram va tashqi ssilkalarni ajratish")
+    help_table.add_row("not_following_back (yoki nfb)", "🔄 Siz/nishon kuzatgan, lekin unga qaytarib obuna bo'lmaganlar")
+    help_table.add_row("fans", "🔄 Nishonga obuna bo'lgan, lekin nishon qaytarib kuzatmaganlar")
+    help_table.add_row("mutual (yoki common)", "🔄 O'zaro do'stlar (har ikki tomon bir-biriga obuna bo'lganlar)")
+    help_table.add_row("mutual @user2", "👥 @user1 va @user2 o'rtasidagi umumiy do'stlar va umumiy obunalarni topish")
+    help_table.add_row("followers deep [N]", "🕵️ Obunachilarning chuqur tahlili (Bio, Ssilka, Obunachi/Post soni)")
+    help_table.add_row("comments <N> (yoki c <N>)", "💬 N-postdagi barcha ochiq kommentlar va javoblarni ko'rish")
+    help_table.add_row("comments @user2", "🕵️ @user1 ning @user2 postlarida yozgan kommentlarini qidirish")
+    help_table.add_row("osint (yoki comments scan)", "🕵️ O'zida va obunalarida qayerga nima komment yozganini avto-qidiruv")
+    help_table.add_row("save avatar / save posts / st / hl", "🖼️ Avatar, postlar, 24s storylar yoki Highlightlarni yuklab olish")
+    help_table.add_row("folder (yoki open folder)", "📂 Yuklab olingan fayllar papkasini ochish")
+    help_table.add_row("login / logout / update", "🔐 Akkaunt boshqaruvi va GitHub'dan avtomatik yangilash")
     help_table.add_row("q / exit", "🚪 Dasturdan chiqish")
     console.print(help_table)
 
@@ -1403,6 +1539,143 @@ def run_interactive_loop(
                     console.print(f"   📁 [underline cyan]{sf}[/underline cyan]")
             except Exception as exc:
                 console.print(f"[bold red]❌ OSINT skanerda xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("nfb", "not_following_back", "unreciprocated"):
+            if not current_profile:
+                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+                continue
+            amt = int(arg) if arg.isdigit() else 200
+            try:
+                with console.status(f"[bold cyan]🔄 @{current_profile.username} aloqalari tahlil qilinmoqda (Not Following Back)...[/bold cyan]", spinner="dots"):
+                    sg = service.analyze_social_graph(current_profile.username, max_users=amt)
+                nfb_list = sg.get("not_following_back") or []
+                render_user_list_to_terminal(
+                    f"@{current_profile.username} kuzatadi, lekin unga qaytarib obuna bo'lmaganlar (Not Following Back)",
+                    nfb_list,
+                    total_count=len(nfb_list),
+                )
+            except Exception as exc:
+                console.print(f"[bold red]❌ Xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("fans", "fan"):
+            if not current_profile:
+                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+                continue
+            amt = int(arg) if arg.isdigit() else 200
+            try:
+                with console.status(f"[bold cyan]🔄 @{current_profile.username} muxlislari tahlil qilinmoqda (Fans)...[/bold cyan]", spinner="dots"):
+                    sg = service.analyze_social_graph(current_profile.username, max_users=amt)
+                fans_list = sg.get("fans") or []
+                render_user_list_to_terminal(
+                    f"@{current_profile.username} ga obuna bo'lgan, lekin @{current_profile.username} ularni kuzatmaydi (Fans)",
+                    fans_list,
+                    total_count=len(fans_list),
+                )
+            except Exception as exc:
+                console.print(f"[bold red]❌ Xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("mutual", "common", "friends_mutual"):
+            if not current_profile:
+                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+                continue
+            sub_u = arg.strip()
+            if sub_u and sub_u.startswith("@") or (sub_u and not sub_u.isdigit()):
+                target_u2 = service.normalize_username(sub_u)
+                try:
+                    with console.status(f"[bold cyan]👥 @{current_profile.username} va @{target_u2} umumiy do'stlari tekshirilmoqda...[/bold cyan]", spinner="dots"):
+                        m_res = service.analyze_mutual_between_users(current_profile.username, target_u2)
+                    c_fols = m_res.get("common_followers") or []
+                    render_user_list_to_terminal(
+                        f"@{current_profile.username} va @{target_u2} — Umumiy Obunachilari (Common Followers)",
+                        c_fols,
+                        total_count=len(c_fols),
+                    )
+                except Exception as exc:
+                    console.print(f"[bold red]❌ Xatolik: {exc}[/bold red]")
+            else:
+                amt = int(arg) if arg.isdigit() else 200
+                try:
+                    with console.status(f"[bold cyan]🔄 @{current_profile.username} o'zaro do'stlari tahlil qilinmoqda (Mutual Friends)...[/bold cyan]", spinner="dots"):
+                        sg = service.analyze_social_graph(current_profile.username, max_users=amt)
+                    mut_list = sg.get("mutual") or []
+                    render_user_list_to_terminal(
+                        f"@{current_profile.username} — O'zaro Do'stlar (Bir-birini kuzatuvchilar)",
+                        mut_list,
+                        total_count=len(mut_list),
+                    )
+                except Exception as exc:
+                    console.print(f"[bold red]❌ Xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("locations", "location", "places", "loc"):
+            if not current_profile:
+                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+                continue
+            amt = int(arg) if arg.isdigit() else 30
+            try:
+                with console.status(f"[bold cyan]📍 @{current_profile.username} postlaridagi geolokatsiyalar tahlil qilinmoqda...[/bold cyan]", spinner="dots"):
+                    loc_data = service.analyze_locations(current_profile, max_posts=amt)
+                render_locations_to_terminal(loc_data)
+            except Exception as exc:
+                console.print(f"[bold red]❌ Geolokatsiyalarni tahlil qilishda xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("inner_circle", "circle", "friends_circle", "affiliates"):
+            if not current_profile:
+                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+                continue
+            amt = int(arg) if arg.isdigit() else 30
+            try:
+                with console.status(f"[bold magenta]🤝 @{current_profile.username} yaqin doirasi (Inner Circle) hisoblanmoqda...[/bold magenta]", spinner="dots"):
+                    circle_data = service.analyze_inner_circle(current_profile, max_posts=amt)
+                render_inner_circle_to_terminal(circle_data)
+            except Exception as exc:
+                console.print(f"[bold red]❌ Yaqin doirani tahlil qilishda xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("activity", "time", "timeline", "sleep"):
+            if not current_profile:
+                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+                continue
+            amt = int(arg) if arg.isdigit() else 40
+            try:
+                with console.status(f"[bold yellow]⏰ @{current_profile.username} faollik grafigi va uyqu rejimi tahlil qilinmoqda...[/bold yellow]", spinner="dots"):
+                    act_data = service.analyze_activity_time(current_profile, max_posts=amt)
+                render_activity_time_to_terminal(act_data)
+            except Exception as exc:
+                console.print(f"[bold red]❌ Faollikni tahlil qilishda xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("contacts", "contact", "emails", "phones", "links"):
+            if not current_profile:
+                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+                continue
+            try:
+                c_data = service.analyze_contacts_and_interests(current_profile)
+                render_contacts_to_terminal(c_data)
+            except Exception as exc:
+                console.print(f"[bold red]❌ Kontaktlarni tahlil qilishda xatolik: {exc}[/bold red]")
+            continue
+
+        if cmd in ("dossier", "report", "osint_report", "html_report"):
+            if not current_profile:
+                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+                continue
+            try:
+                with console.status(f"[bold bright_magenta]📊 @{current_profile.username} bo'yicha to'liq HTML OSINT Dosye yaratilmoqda...[/bold bright_magenta]", spinner="dots"):
+                    sg_opt = None
+                    try:
+                        sg_opt = service.analyze_social_graph(current_profile.username, max_users=150)
+                    except Exception:
+                        pass
+                    dossier_path = service.generate_html_osint_dossier(current_profile, social_graph=sg_opt)
+                console.print(f"[bold bright_green]✅ To'liq OSINT Dosye tayyorlandi:[/bold bright_green] [underline cyan]{dossier_path}[/underline cyan]")
+                service.open_in_system_viewer(dossier_path)
+            except Exception as exc:
+                console.print(f"[bold red]❌ Dosye yaratishda xatolik: {exc}[/bold red]")
             continue
 
         if cmd in ("st", "story", "stories"):
