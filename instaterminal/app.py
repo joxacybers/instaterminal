@@ -1542,16 +1542,17 @@ def run_interactive_loop(
             continue
 
         if cmd in ("nfb", "not_following_back", "unreciprocated"):
-            if not current_profile:
-                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
                 continue
             amt = int(arg) if arg.isdigit() else 200
             try:
-                with console.status(f"[bold cyan]🔄 @{current_profile.username} aloqalari tahlil qilinmoqda (Not Following Back)...[/bold cyan]", spinner="dots"):
-                    sg = service.analyze_social_graph(current_profile.username, max_users=amt)
+                with console.status(f"[bold cyan]🔄 @{target_p.username} aloqalari tahlil qilinmoqda (Not Following Back)...[/bold cyan]", spinner="dots"):
+                    sg = service.analyze_social_graph(target_p.username, max_users=amt)
                 nfb_list = sg.get("not_following_back") or []
                 render_user_list_to_terminal(
-                    f"@{current_profile.username} kuzatadi, lekin unga qaytarib obuna bo'lmaganlar (Not Following Back)",
+                    f"@{target_p.username} kuzatadi, lekin unga qaytarib obuna bo'lmaganlar (Not Following Back)",
                     nfb_list,
                     total_count=len(nfb_list),
                 )
@@ -1560,16 +1561,17 @@ def run_interactive_loop(
             continue
 
         if cmd in ("fans", "fan"):
-            if not current_profile:
-                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
                 continue
             amt = int(arg) if arg.isdigit() else 200
             try:
-                with console.status(f"[bold cyan]🔄 @{current_profile.username} muxlislari tahlil qilinmoqda (Fans)...[/bold cyan]", spinner="dots"):
-                    sg = service.analyze_social_graph(current_profile.username, max_users=amt)
+                with console.status(f"[bold cyan]🔄 @{target_p.username} muxlislari tahlil qilinmoqda (Fans)...[/bold cyan]", spinner="dots"):
+                    sg = service.analyze_social_graph(target_p.username, max_users=amt)
                 fans_list = sg.get("fans") or []
                 render_user_list_to_terminal(
-                    f"@{current_profile.username} ga obuna bo'lgan, lekin @{current_profile.username} ularni kuzatmaydi (Fans)",
+                    f"@{target_p.username} ga obuna bo'lgan, lekin @{target_p.username} ularni kuzatmaydi (Fans)",
                     fans_list,
                     total_count=len(fans_list),
                 )
@@ -1578,18 +1580,19 @@ def run_interactive_loop(
             continue
 
         if cmd in ("mutual", "common", "friends_mutual"):
-            if not current_profile:
-                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
                 continue
             sub_u = arg.strip()
             if sub_u and sub_u.startswith("@") or (sub_u and not sub_u.isdigit()):
                 target_u2 = service.normalize_username(sub_u)
                 try:
-                    with console.status(f"[bold cyan]👥 @{current_profile.username} va @{target_u2} umumiy do'stlari tekshirilmoqda...[/bold cyan]", spinner="dots"):
-                        m_res = service.analyze_mutual_between_users(current_profile.username, target_u2)
+                    with console.status(f"[bold cyan]👥 @{target_p.username} va @{target_u2} umumiy do'stlari tekshirilmoqda...[/bold cyan]", spinner="dots"):
+                        m_res = service.analyze_mutual_between_users(target_p.username, target_u2)
                     c_fols = m_res.get("common_followers") or []
                     render_user_list_to_terminal(
-                        f"@{current_profile.username} va @{target_u2} — Umumiy Obunachilari (Common Followers)",
+                        f"@{target_p.username} va @{target_u2} — Umumiy Obunachilari (Common Followers)",
                         c_fols,
                         total_count=len(c_fols),
                     )
@@ -1598,11 +1601,11 @@ def run_interactive_loop(
             else:
                 amt = int(arg) if arg.isdigit() else 200
                 try:
-                    with console.status(f"[bold cyan]🔄 @{current_profile.username} o'zaro do'stlari tahlil qilinmoqda (Mutual Friends)...[/bold cyan]", spinner="dots"):
-                        sg = service.analyze_social_graph(current_profile.username, max_users=amt)
+                    with console.status(f"[bold cyan]🔄 @{target_p.username} o'zaro do'stlari tahlil qilinmoqda (Mutual Friends)...[/bold cyan]", spinner="dots"):
+                        sg = service.analyze_social_graph(target_p.username, max_users=amt)
                     mut_list = sg.get("mutual") or []
                     render_user_list_to_terminal(
-                        f"@{current_profile.username} — O'zaro Do'stlar (Bir-birini kuzatuvchilar)",
+                        f"@{target_p.username} — O'zaro Do'stlar (Bir-birini kuzatuvchilar)",
                         mut_list,
                         total_count=len(mut_list),
                     )
@@ -1611,67 +1614,72 @@ def run_interactive_loop(
             continue
 
         if cmd in ("locations", "location", "places", "loc"):
-            if not current_profile:
-                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
                 continue
             amt = int(arg) if arg.isdigit() else 30
             try:
-                with console.status(f"[bold cyan]📍 @{current_profile.username} postlaridagi geolokatsiyalar tahlil qilinmoqda...[/bold cyan]", spinner="dots"):
-                    loc_data = service.analyze_locations(current_profile, max_posts=amt)
+                with console.status(f"[bold cyan]📍 @{target_p.username} postlaridagi geolokatsiyalar tahlil qilinmoqda...[/bold cyan]", spinner="dots"):
+                    loc_data = service.analyze_locations(target_p, max_posts=amt)
                 render_locations_to_terminal(loc_data)
             except Exception as exc:
                 console.print(f"[bold red]❌ Geolokatsiyalarni tahlil qilishda xatolik: {exc}[/bold red]")
             continue
 
         if cmd in ("inner_circle", "circle", "friends_circle", "affiliates"):
-            if not current_profile:
-                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
                 continue
             amt = int(arg) if arg.isdigit() else 30
             try:
-                with console.status(f"[bold magenta]🤝 @{current_profile.username} yaqin doirasi (Inner Circle) hisoblanmoqda...[/bold magenta]", spinner="dots"):
-                    circle_data = service.analyze_inner_circle(current_profile, max_posts=amt)
+                with console.status(f"[bold magenta]🤝 @{target_p.username} yaqin doirasi (Inner Circle) hisoblanmoqda...[/bold magenta]", spinner="dots"):
+                    circle_data = service.analyze_inner_circle(target_p, max_posts=amt)
                 render_inner_circle_to_terminal(circle_data)
             except Exception as exc:
                 console.print(f"[bold red]❌ Yaqin doirani tahlil qilishda xatolik: {exc}[/bold red]")
             continue
 
         if cmd in ("activity", "time", "timeline", "sleep"):
-            if not current_profile:
-                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
                 continue
             amt = int(arg) if arg.isdigit() else 40
             try:
-                with console.status(f"[bold yellow]⏰ @{current_profile.username} faollik grafigi va uyqu rejimi tahlil qilinmoqda...[/bold yellow]", spinner="dots"):
-                    act_data = service.analyze_activity_time(current_profile, max_posts=amt)
+                with console.status(f"[bold yellow]⏰ @{target_p.username} faollik grafigi va uyqu rejimi tahlil qilinmoqda...[/bold yellow]", spinner="dots"):
+                    act_data = service.analyze_activity_time(target_p, max_posts=amt)
                 render_activity_time_to_terminal(act_data)
             except Exception as exc:
                 console.print(f"[bold red]❌ Faollikni tahlil qilishda xatolik: {exc}[/bold red]")
             continue
 
         if cmd in ("contacts", "contact", "emails", "phones", "links"):
-            if not current_profile:
-                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
                 continue
             try:
-                c_data = service.analyze_contacts_and_interests(current_profile)
+                c_data = service.analyze_contacts_and_interests(target_p)
                 render_contacts_to_terminal(c_data)
             except Exception as exc:
                 console.print(f"[bold red]❌ Kontaktlarni tahlil qilishda xatolik: {exc}[/bold red]")
             continue
 
         if cmd in ("dossier", "report", "osint_report", "html_report"):
-            if not current_profile:
-                console.print("[yellow]Avval biror username qidiring.[/yellow]")
+            target_p = current_profile or (service.fetch_real_profile(service.username, download_media=False) if service.username else None)
+            if not target_p:
+                console.print("[yellow]Avval biror username qidiring (masalan: @username).[/yellow]")
                 continue
             try:
-                with console.status(f"[bold bright_magenta]📊 @{current_profile.username} bo'yicha to'liq HTML OSINT Dosye yaratilmoqda...[/bold bright_magenta]", spinner="dots"):
+                with console.status(f"[bold bright_magenta]📊 @{target_p.username} bo'yicha to'liq HTML OSINT Dosye yaratilmoqda...[/bold bright_magenta]", spinner="dots"):
                     sg_opt = None
                     try:
-                        sg_opt = service.analyze_social_graph(current_profile.username, max_users=150)
+                        sg_opt = service.analyze_social_graph(target_p.username, max_users=150)
                     except Exception:
                         pass
-                    dossier_path = service.generate_html_osint_dossier(current_profile, social_graph=sg_opt)
+                    dossier_path = service.generate_html_osint_dossier(target_p, social_graph=sg_opt)
                 console.print(f"[bold bright_green]✅ To'liq OSINT Dosye tayyorlandi:[/bold bright_green] [underline cyan]{dossier_path}[/underline cyan]")
                 service.open_in_system_viewer(dossier_path)
             except Exception as exc:
