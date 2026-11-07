@@ -9,10 +9,9 @@ echo "📸 InstaTerminal — Android Termux O'rnatish Boshlandi..."
 echo "============================================================"
 
 # 1. Termux paketlarini yangilash va kerakli tizim kutubxonalarini o'rnatish
-# (Pillow va cryptography Termuxda tayyor pre-built paket sifatida o'rnatiladi)
 echo "📦 [1/4] Termux tizim paketlari o'rnatilmoqda..."
 pkg update -y
-pkg install -y python git libjpeg-turbo zlib freetype python-pillow python-cryptography termux-api
+pkg install -y python python-pip python-pillow git termux-api
 
 # 2. Android telefon xotirasiga (Gallery / Download) ruxsat so'rash
 if [ ! -d "$HOME/storage" ]; then
@@ -24,30 +23,30 @@ else
     echo "📂 [2/4] Telefon xotirasi allaqachon ulangan."
 fi
 
-# 3. Python paketlarini o'rnatish
-echo "🐍 [3/4] InstaTerminal va Python kutubxonalari o'rnatilmoqda..."
-pip install --upgrade pip
-pip install rich httpx instagrapi
-pip install --no-deps -e .
+# 3. Python paketlarini o'rnatish (ESLATMA: Termuxda 'pip install --upgrade pip' taqiqlangan!)
+echo "🐍 [3/4] Python kutubxonalari (rich, httpx) o'rnatilmoqda..."
+pip install rich httpx
 
-# 4. Global 'instaterminal' va 'insta' buyruqlarini kafolatlash
+# 4. Global 'instaterminal' va 'insta' buyruqlarini sozlash
 echo "⚡ [4/4] Global 'instaterminal' va 'insta' buyruqlari sozlanmoqda..."
-PROJECT_DIR="$(pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="${PREFIX:-/data/data/com.termux/files/usr}/bin"
 
-if [ -d "$BIN_DIR" ]; then
-    cat > "$BIN_DIR/instaterminal" <<EOF
-#!/data/data/com.termux/files/usr/bin/bash
-exec python -m instaterminal "\$@"
-EOF
-    chmod +x "$BIN_DIR/instaterminal"
+mkdir -p "$BIN_DIR"
 
-    cat > "$BIN_DIR/insta" <<EOF
+cat > "$BIN_DIR/instaterminal" <<EOF
 #!/data/data/com.termux/files/usr/bin/bash
+export PYTHONPATH="$PROJECT_DIR:\$PYTHONPATH"
 exec python -m instaterminal "\$@"
 EOF
-    chmod +x "$BIN_DIR/insta"
-fi
+chmod +x "$BIN_DIR/instaterminal"
+
+cat > "$BIN_DIR/insta" <<EOF
+#!/data/data/com.termux/files/usr/bin/bash
+export PYTHONPATH="$PROJECT_DIR:\$PYTHONPATH"
+exec python -m instaterminal "\$@"
+EOF
+chmod +x "$BIN_DIR/insta"
 
 echo ""
 echo "============================================================"
@@ -56,11 +55,10 @@ echo "============================================================"
 echo "🔐 Birinchi marta ishga tushirganingizda Instagram login/parolingizni"
 echo "   kiritasiz — sessiya xotirada saqlanadi va keyingi safar so'ramaydi!"
 echo "📁 Yuklab olingan barcha video/rasmlar telefonning:"
-echo "   /sdcard/Download/InstaTerminal  (Galereya) papkasiga tushadi!"
+echo "   /sdcard/Download/InstaTerminal/@<username>/  (Galereya) papkasiga tushadi!"
 echo ""
 echo "🚀 Ishga tushirish uchun Termux'da shunchaki yozing:"
-echo "   instaterminal"
-echo "   yoki qisqacha:"
 echo "   insta"
+echo "   yoki:"
+echo "   instaterminal"
 echo "============================================================"
-

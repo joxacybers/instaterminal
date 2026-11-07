@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import json
@@ -44,6 +45,258 @@ class InstaAuthError(Exception):
         self.requires_2fa = requires_2fa
 
 
+class _AttrObj:
+    """Lightweight object wrapper over dict for pure-httpx Mobile API v1 compatibility (Termux)."""
+
+    def __init__(self, data: dict[str, Any]):
+        self._data = data
+        for k, v in data.items():
+            setattr(self, k, v)
+
+    def __getattr__(self, name: str) -> Any:
+        return self._data.get(name)
+
+    def dict(self) -> dict[str, Any]:
+        return dict(self._data)
+
+    def model_dump(self, mode: str = "json") -> dict[str, Any]:
+        return dict(self._data)
+
+
+class _LightweightV1Client:
+    """
+    Pure-httpx Instagram Mobile v1 API client.
+    Used automatically on Android Termux when `instagrapi` (which requires Rust/C compilation)
+    is not installed.
+    """
+
+    ANDROID_UA = (
+        "Instagram 449.0.0.52.84 Android "
+        "(34/14; 480dpi; 1344x2992; Google/google; Pixel 8 Pro; husky; husky; en_US; 1079242191)"
+    )
+
+    def __init__(self) -> None:
+        self.request_timeout: float = 15.0
+        self.username: str = ""
+        self.password: str = ""
+        self.user_id: Optional[str] = None
+        self.authorization_data: dict[str, str] = {}
+        self.cookies: dict[str, str] = {}
+        self.user_agent: str = self.ANDROID_UA
+
+    def login_by_sessionid(self, sessionid: str) -> bool:
+        clean_sid = urllib.parse.unquote(sessionid.strip())
+        uid = clean_sid.split(":")[0]
+        if not uid.isdigit():
+            raise ValueError("Invalid sessionid format")
+        self.user_id = uid
+        self.authorization_data = {
+            "ds_user_id": uid,
+            "sessionid": urllib.parse.quote(clean_sid, safe=""),
+            "should_use_header_over_cookies": True,
+        }
+        self.cookies["sessionid"] = clean_sid
+        self.cookies["ds_user_id"] = uid
+        return True
+
+    def get_settings(self) -> dict[str, Any]:
+        return {
+            "authorization_data": dict(self.authorization_data),
+            "cookies": dict(self.cookies),
+            "user_agent": self.user_agent,
+            "username": self.username,
+        }
+
+    def load_settings(self, path: Path) -> None:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        self.authorization_data = dict(raw.get("authorization_data") or {})
+        self.cookies = dict(raw.get("cookies") or {})
+        if raw.get("user_agent"):
+            self.user_agent = str(raw["user_agent"])
+        sid = urllib.parse.unquote(str(self.authorization_data.get("sessionid") or self.cookies.get("sessionid") or ""))
+        if sid and ":" in sid:
+            self.user_id = sid.split(":")[0]
+
+    def _headers(self) -> dict[str, str]:
+        sid = urllib.parse.unquote(str(self.authorization_data.get("sessionid") or self.cookies.get("sessionid") or ""))
+        uid = str(self.user_id or (sid.split(":")[0] if ":" in sid else ""))
+        token = base64.b64encode(
+            json.dumps({"ds_user_id": uid, "sessionid": sid}).encode("utf-8")
+        ).decode("utf-8")
+        return {
+            "User-Agent": self.user_agent,
+            "Authorization": f"Bearer IGT:2:{token}",
+            "X-IG-App-ID": "936619743392459",
+            "Accept": "*/*",
+            "Accept-Language": "en-US",
+        }
+
+    def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        url = f"https://i.instagram.com/api/v1/{path.lstrip('/')}"
+        with httpx.Client(headers=self._headers(), timeout=self.request_timeout, follow_redirects=True) as client:
+            resp = client.get(url, params=params)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"Instagram API HTTP {resp.status_code}: {resp.text[:200]}")
+            return resp.json()
+
+    @staticmethod
+    def _parse_media_dict(m: dict[str, Any]) -> _AttrObj:
+        imgs = (m.get("image_versions2") or {}).get("candidates") or []
+        vids = m.get("video_versions") or []
+        thumb_url = str(imgs[0]["url"]) if (imgs and isinstance(imgs[0], dict) and imgs[0].get("url")) else None
+        video_url = str(vids[0]["url"]) if (vids and isinstance(vids[0], dict) and vids[0].get("url")) else None
+        taken_ts = int(m.get("taken_at") or 0)
+        taken_dt = datetime.fromtimestamp(taken_ts) if taken_ts > 0 else None
+        cap_obj = m.get("caption")
+        cap_text = str(cap_obj.get("text") or "") if isinstance(cap_obj, dict) else str(cap_obj or "")
+
+        resources: list[_AttrObj] = []
+        for r in m.get("carousel_media") or m.get("resources") or []:
+            if isinstance(r, dict):
+                r_imgs = (r.get("image_versions2") or {}).get("candidates") or []
+                r_vids = r.get("video_versions") or []
+                resources.append(
+                    _AttrObj(
+                        {
+                            "pk": str(r.get("pk") or r.get("id") or ""),
+                            "media_type": int(r.get("media_type") or 1),
+                            "thumbnail_url": str(r_imgs[0]["url"]) if (r_imgs and r_imgs[0].get("url")) else None,
+                            "video_url": str(r_vids[0]["url"]) if (r_vids and r_vids[0].get("url")) else None,
+                        }
+                    )
+                )
+
+        loc_raw = m.get("location")
+        loc_obj = _AttrObj(loc_raw) if isinstance(loc_raw, dict) else None
+
+        return _AttrObj(
+            {
+                "pk": str(m.get("pk") or m.get("id") or ""),
+                "code": str(m.get("code") or ""),
+                "media_type": int(m.get("media_type") or 1),
+                "product_type": str(m.get("product_type") or "feed"),
+                "taken_at": taken_dt,
+                "thumbnail_url": thumb_url,
+                "video_url": video_url,
+                "video_duration": float(m.get("video_duration") or 0.0),
+                "has_audio": bool(m.get("has_audio", False)),
+                "caption_text": cap_text,
+                "like_count": int(m.get("like_count") or 0),
+                "comment_count": int(m.get("comment_count") or 0),
+                "like_and_view_counts_disabled": bool(m.get("like_and_view_counts_disabled", False)),
+                "play_count": int(m.get("play_count") or m.get("view_count") or 0),
+                "resources": resources,
+                "location": loc_obj,
+            }
+        )
+
+    def user_info_v1(self, user_id: int | str) -> _AttrObj:
+        data = self._get(f"users/{user_id}/info/")
+        u = dict(data.get("user") or {})
+        hd_info = u.get("hd_profile_pic_url_info") or {}
+        if isinstance(hd_info, dict) and hd_info.get("url"):
+            u.setdefault("profile_pic_url_hd", hd_info["url"])
+        return _AttrObj(u)
+
+    def user_info_by_username_v1(self, username: str) -> _AttrObj:
+        data = self._get(f"users/{username}/usernameinfo/")
+        u = dict(data.get("user") or {})
+        hd_info = u.get("hd_profile_pic_url_info") or {}
+        if isinstance(hd_info, dict) and hd_info.get("url"):
+            u.setdefault("profile_pic_url_hd", hd_info["url"])
+        return _AttrObj(u)
+
+    def user_highlights_v1(self, user_id: int | str) -> list[_AttrObj]:
+        data = self._get(f"highlights/{user_id}/highlights_tray/")
+        out: list[_AttrObj] = []
+        for h in data.get("tray") or []:
+            if not isinstance(h, dict):
+                continue
+            c_ts = int(h.get("created_at") or 0)
+            out.append(
+                _AttrObj(
+                    {
+                        "pk": str(h.get("id") or "").replace("highlight:", ""),
+                        "title": str(h.get("title") or "Highlight"),
+                        "media_count": int(h.get("media_count") or 0),
+                        "is_pinned_highlight": bool(h.get("is_pinned_highlight", False)),
+                        "latest_reel_media": int(h.get("latest_reel_media") or 0),
+                        "created_at": datetime.fromtimestamp(c_ts) if c_ts > 0 else None,
+                        "cover_media": h.get("cover_media") or {},
+                    }
+                )
+            )
+        return out
+
+    def highlight_info(self, highlight_pk: int | str) -> _AttrObj:
+        clean_id = str(highlight_pk).replace("highlight:", "")
+        key = f"highlight:{clean_id}"
+        data = self._get("feed/reels_media/", params={"reel_ids": key})
+        reels = data.get("reels") or {}
+        node = reels.get(key) or {}
+        items = [self._parse_media_dict(it) for it in (node.get("items") or []) if isinstance(it, dict)]
+        u_raw = node.get("user") or {}
+        cov_raw = (node.get("cover_media") or {}).get("cropped_image_version") or {}
+        return _AttrObj(
+            {
+                "pk": clean_id,
+                "title": str(node.get("title") or "Highlight"),
+                "user": _AttrObj(u_raw if isinstance(u_raw, dict) else {}),
+                "cover_media": cov_raw.get("url") if isinstance(cov_raw, dict) else None,
+                "items": items,
+            }
+        )
+
+    def user_stories_v1(self, user_id: int | str) -> list[_AttrObj]:
+        data = self._get(f"feed/user/{user_id}/story/")
+        reel = data.get("reel") or {}
+        return [self._parse_media_dict(it) for it in (reel.get("items") or []) if isinstance(it, dict)]
+
+    def user_medias_v1(self, user_id: int | str, amount: int = 20) -> list[_AttrObj]:
+        results: list[_AttrObj] = []
+        max_id: Optional[str] = None
+        target = amount if amount > 0 else 200
+        while len(results) < target:
+            params: dict[str, Any] = {"count": min(33, target - len(results))}
+            if max_id:
+                params["max_id"] = max_id
+            data = self._get(f"feed/user/{user_id}/", params=params)
+            for it in data.get("items") or []:
+                if isinstance(it, dict):
+                    results.append(self._parse_media_dict(it))
+                    if len(results) >= target:
+                        break
+            if not data.get("more_available") or not data.get("next_max_id"):
+                break
+            max_id = str(data["next_max_id"])
+        return results
+
+    def _fetch_friendship_list(self, endpoint: str, amount: int = 0) -> list[_AttrObj]:
+        results: list[_AttrObj] = []
+        max_id: Optional[str] = None
+        target = amount if amount > 0 else 1000
+        while len(results) < target:
+            params: dict[str, Any] = {"count": min(100, target - len(results))}
+            if max_id:
+                params["max_id"] = max_id
+            data = self._get(endpoint, params=params)
+            for u in data.get("users") or []:
+                if isinstance(u, dict):
+                    results.append(_AttrObj(u))
+                    if len(results) >= target:
+                        break
+            if not data.get("big_list") or not data.get("next_max_id"):
+                break
+            max_id = str(data["next_max_id"])
+        return results
+
+    def user_followers_v1(self, user_id: int | str, amount: int = 0) -> list[_AttrObj]:
+        return self._fetch_friendship_list(f"friendships/{user_id}/followers/", amount=amount)
+
+    def user_following_v1(self, user_id: int | str, amount: int = 0) -> list[_AttrObj]:
+        return self._fetch_friendship_list(f"friendships/{user_id}/following/", amount=amount)
+
+
 class InstaClientService:
     """Real Instagram service fetching live profile, highlights, and posts directly from Instagram."""
 
@@ -71,10 +324,16 @@ class InstaClientService:
 
     def _ensure_instagrapi(self):
         if self._cl is None:
-            from instagrapi import Client
+            if is_termux():
+                self._cl = _LightweightV1Client()
+            else:
+                try:
+                    from instagrapi import Client
 
-            self._cl = Client()
-            self._cl.request_timeout = 15
+                    self._cl = Client()
+                    self._cl.request_timeout = 15
+                except Exception:
+                    self._cl = _LightweightV1Client()
         return self._cl
 
     def _has_live_token(self) -> bool:
